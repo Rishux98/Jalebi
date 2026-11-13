@@ -10,5 +10,6 @@ opencv-python
 torch
 segmentation-models-pytorch
 datasets
+pandas
 # NOTE: `noise` (Perlin) was dropped: no Windows wheel (needs MSVC to build).
 # world/synthetic.py uses its own vectorised fractal value noise instead.

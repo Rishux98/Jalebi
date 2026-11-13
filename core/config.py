@@ -89,10 +89,33 @@ class Config:
                                         # ~4 pts of modelled P(success) for little extra entropy reduction)
     pareto_sweep: tuple[float, float, int] = (0.0, 10.0, 11)  # risk_weight linspace(lo, hi, n)
 
+    # ---- science targets (P4)
+    sci_w_ice: float = 0.4              # science value = w_ice*ice + w_rim*rim + w_bedrock*P(bedrock)
+    sci_w_rim: float = 0.3              #   (weights sum to 1 -> value in [0, 1])
+    sci_w_bedrock: float = 0.3
+    sci_slope_center_deg: float = 12.0  # deg; rim/layering proxy favours moderate slopes ...
+    sci_slope_width_deg: float = 6.0    # deg; ... Gaussian band around the centre
+    sci_rim_curv_pct: float = 95.0      # percentile of positive curvature used to normalise rim proxy
+    sci_n_targets: int = 8              # candidates kept after non-max suppression
+    sci_nms_cells: int = 15             # cells; NMS window (min spacing between targets ~ half of it)
+    sci_target_radius: int = 3          # cells; disc averaged for a target's value / entropy
+    sci_bootstrap_n: int = 50           # bootstrap samples for value_mean / value_std
+    sci_ice_noise_std: float = 0.1      # 1-sigma noise of the orbital ice signal (bootstrap)
+    sci_alpha_per_cost: float = 0.0005  # utility penalty per unit of A* path cost (~0.15 for 300)
+    sci_beta_risk: float = 0.5          # utility penalty per unit of (1 - success_prob)
+    sci_min_utility: float = 0.0        # targets at or below this utility are skipped
+    sci_energy_budget_wh: float = 800.0  # Wh for start -> targets -> goal. Direct traverse ~545 Wh on
+                                        # 200x200; 800 selects 5-6 of 8 targets on seeds 3/7/42 and the
+                                        # budget (not utility) is the binding constraint. (0.001/1.0/1500:
+                                        # 0-8 picks depending on seed, budget never binding.)
+
     # ---- sensing / autonomy
     sensor_radius: int = 6              # cells
-    hazard_prob_max: float = 0.3        # replan if a path cell exceeds this
+    hazard_prob_max: float = 0.3        # replan if a path cell exceeds this (also a hard limit when planning)
     replan_cost_increase: float = 0.20  # replan if path cost rises by > 20 %
+    loop_near_frac: float = 0.5         # log keep_path when a check reaches this fraction of its threshold
+    loop_max_steps: int = 2000          # safety cap on autonomy-loop steps
+    loop_snapshot_every: int = 10       # steps between stored belief-entropy snapshots (dashboard slider)
 
     # ---- synthetic world generator
     gen_noise_octaves: int = 5          # fractal value-noise octaves
