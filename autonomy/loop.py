@@ -100,8 +100,11 @@ class Rover:
 
     def __init__(self, world: World, cfg: Config = DEFAULT, mode: str = "balanced", seed: int | None = None,
                  confusion: np.ndarray | None = None, targets: Sequence[Target | RC] | None = None,
-                 layers: TerrainLayers | None = None, belief: Belief | None = None) -> None:
+                 layers: TerrainLayers | None = None, belief: Belief | None = None,
+                 budget_wh: float | None = None) -> None:
         self.world, self.cfg, self.mode = world, cfg, mode
+        # energy budget (Wh) enforced on every (re)plan while targets remain; default only with targets
+        self.budget_wh = budget_wh if budget_wh is not None else (cfg.sci_energy_budget_wh if targets else None)
         self.seed = cfg.seed if seed is None else int(seed)
         self.mcfg, self.risk_weight = mode_config(mode, cfg)
         self.rng = np.random.default_rng(self.seed)
@@ -210,6 +213,23 @@ class Rover:
                     continue
             return None
 
+    def _fit_budget(self, p: Plan | None) -> Plan | None:
+        """While used + planned energy > budget and targets remain, drop the lowest-value target (logged).
+
+        The goal itself is never dropped: with no targets left the route is kept even if over budget.
+        """
+        while (p is not None and self.budget_wh is not None and self.targets
+               and self.energy_wh + p.energy_wh > self.budget_wh):
+            t = min(self.targets, key=lambda x: x.value_mean)
+            ev = make_evidence(t.rc, self.rc, self.budget_wh, "budget_wh", target_id=t.id, value_mean=t.value_mean,
+                               value_std=t.value_std, utility=t.utility, energy_wh=self.energy_wh + p.energy_wh,
+                               energy_used_wh=self.energy_wh, route_energy_wh=p.energy_wh, budget_wh=self.budget_wh,
+                               n_waypoints=len(self.targets))
+            self.log.record(self.step_idx, "budget_exceeded", "skip_target", ev, confidence_at(self.belief, t.rc))
+            self.targets.remove(t)
+            p = self._find_route()
+        return p
+
     def _adopt(self, p: Plan) -> None:
         p.meta["step"] = self.step_idx
         self.plan, self.path, self.path_idx = p, list(p.path), 0
@@ -218,7 +238,7 @@ class Rover:
         self._keep_logged.clear()
 
     def _initial_plan(self) -> None:
-        p = self._find_route()
+        p = self._fit_budget(self._find_route())
         if p is None:
             self._stop_no_route()
             return
@@ -289,7 +309,7 @@ class Rover:
     def _replan(self, trig: dict) -> bool:
         rem = self.path[self.path_idx:]
         old = evaluate_path(self.costmap, rem, self.cs, self.risk_weight)
-        new = self._find_route()
+        new = self._fit_budget(self._find_route())
         event = {"impassable": "impassable_on_path", "hazard": "hazard_on_path", "cost": "cost_increase"}[trig["kind"]]
         nums = {**self._cell_ev(trig["cell"]), "trigger": trig["kind"], "old_cost": trig["old_cost"],
                 "new_cost": trig["new_cost"], "cost_increase_pct": trig["pct"],

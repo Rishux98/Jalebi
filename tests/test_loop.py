@@ -115,6 +115,21 @@ def test_targets_visited_in_order():
     assert len(cont) == 1 and cont[0].evidence["target_id"] == 7 and mid in res.trajectory
 
 
+def test_budget_drops_lowest_value_target():
+    w = make_world(N, N, seed=3)
+    a = (w.start[0] + 10, w.start[1] + 10)
+    b = (w.start[0] + 20, w.start[1] + 5)
+    ts = [Target(id=1, rc=a, value_mean=0.6, value_std=0.05), Target(id=2, rc=b, value_mean=0.2, value_std=0.05)]
+    probe = Rover(w, DEFAULT, "science", seed=3, confusion=FALLBACK_CONFUSION, targets=[ts[0]], budget_wh=1e9)
+    budget = probe.plan.energy_wh + 1.0              # fits target 1 only
+    rover = Rover(make_world(N, N, seed=3), DEFAULT, "science", seed=3, confusion=FALLBACK_CONFUSION,
+                  targets=[Target(**t.__dict__) for t in ts], budget_wh=budget)
+    skips = rover.log.by_decision("skip_target")
+    assert skips and skips[0].evidence["target_id"] == 2 and skips[0].evidence["threshold_name"] == "budget_wh"
+    assert skips[0].evidence["energy_wh"] > budget and [t.id for t in rover.targets] == [1]
+    assert rover.plan.energy_wh <= budget
+
+
 def test_inject_needs_room():
     w = make_world(N, N, seed=3)
     rover = Rover(w, DEFAULT, "balanced", seed=3, confusion=FALLBACK_CONFUSION)
