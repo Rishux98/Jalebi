@@ -72,6 +72,23 @@ class Config:
     percep_dropout: float = 0.2         # Dropout2d before the seg head (MC-dropout)
     percep_mc_passes: int = 15          # T stochastic forward passes at inference
 
+    # ---- orbital prior belief (P3): simulated low-res orbital classification
+    prior_downsample: int = 8           # x; block size of the orbital pixel (majority vote per block)
+    prior_label_noise: float = 0.2      # fraction of orbital pixels relabelled (draws follow orbital class freq)
+    prior_blur_sigma: float = 4.0       # cells; Gaussian blur of the upsampled one-hot map
+    prior_temperature: float = 1.5      # >1 flattens the soft probs (p ** (1/T), renormalised)
+    prior_floor: float = 0.002          # min prior prob per class so Bayes can still discover hazards.
+                                        # Calibrated: 0.03 -> every ~300-cell route scores P(success)~0
+                                        # (0.5 * 0.03 rock hazard per cell); 0.002 -> 62-74 % on safe
+                                        # routes, hidden boulders reach P(big_rock) ~0.5 after 2-3 looks.
+
+    # ---- multi-objective planning (P3)
+    pareto_risk_balanced: float = 2.0   # A* risk_weight for "balanced" / "science"
+    pareto_risk_safest: float = 50.0    # A* risk_weight for "safest"
+    pareto_lambda_unc_safest: float = 2.0  # entropy weight for "safest" (avoid unknown terrain; 3.0 cost
+                                        # ~4 pts of modelled P(success) for little extra entropy reduction)
+    pareto_sweep: tuple[float, float, int] = (0.0, 10.0, 11)  # risk_weight linspace(lo, hi, n)
+
     # ---- sensing / autonomy
     sensor_radius: int = 6              # cells
     hazard_prob_max: float = 0.3        # replan if a path cell exceeds this

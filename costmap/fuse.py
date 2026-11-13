@@ -92,6 +92,13 @@ def build_costmap(layers: TerrainLayers, class_probs: np.ndarray, cfg: Config = 
                    components=comps, energy_wh_per_m=energy)
 
 
+def costmap_from_belief(layers: TerrainLayers, belief: Belief, cfg: Config = DEFAULT,
+                        lambda_unc: float | None = None) -> CostMap:
+    """CostMap from the rover's belief (P3+): class terms use ``belief.class_probs``,
+    the uncertainty term uses ``belief.entropy`` (nats)."""
+    return build_costmap(layers, belief.class_probs, cfg, lambda_unc=lambda_unc, entropy=belief.entropy)
+
+
 if __name__ == "__main__":
     import time
     from pathlib import Path
