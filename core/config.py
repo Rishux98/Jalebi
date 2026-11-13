@@ -32,7 +32,14 @@ class Config:
     # ---- terrain classes
     class_risk: dict[int, float] = field(default_factory=_default_class_risk)  # per-class risk in [0,1]
     big_rock_impassable_p: float = 0.6  # P(big_rock) above this -> cost inf
-    sand_hazard_factor: float = 0.5     # hazard contribution of P(sand) (P1 formula)
+
+    # ---- per-cell hazard model (probability that traversing ONE cell ends the mission)
+    # hazard_prob = 1 - (1 - h_slope*p_slope_exceed) * (1 - h_rock*P(big_rock)) * (1 - h_sand*P(sand))
+    # (ROADMAP formula with unit factors 1/1/0.5; scaled down because success_prob is a product
+    #  over ~250 path cells — with 0.5 per sand cell any route touching sand would score ~0 %.)
+    hazard_slope_factor: float = 0.02   # mission loss per cell if slope is truly over the limit
+    hazard_rock_factor: float = 0.5     # per cell, times P(big_rock)
+    sand_hazard_factor: float = 0.004   # per cell, times P(sand) (embedding risk, cf. Spirit)
 
     # ---- cost weights (dimensionless)
     w_slope: float = 1.0
@@ -45,8 +52,11 @@ class Config:
 
     # ---- terrain features
     roughness_window: int = 5           # cells, odd
+    rough_ref_m: float = 0.25           # m; roughness normaliser (rough/ref clipped to [0, 1])
     dem_noise_sigma: float = 0.3        # m, orbital DEM 1-sigma error
+    dem_noise_corr_cells: float = 3.0   # cells; Gaussian correlation length of DEM error
     mc_samples: int = 30                # Monte-Carlo draws for P(slope > limit)
+    mc_max_bytes: float = 200e6         # memory cap per Monte-Carlo batch
 
     # ---- sensing / autonomy
     sensor_radius: int = 6              # cells

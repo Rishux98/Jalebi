@@ -26,6 +26,7 @@ from scipy import ndimage
 from core.config import DEFAULT, Config
 from core.io import hillshade
 from core.types import BEDROCK, BIG_ROCK, CLASS_NAMES, N_CLASSES, RC, SAND, SOIL, World
+from terrain.features import slope_deg  # canonical slope (shared with the cost map)
 
 _F32 = np.float32
 
@@ -58,12 +59,6 @@ def fractal_noise(h: int, w: int, rng: np.random.Generator, octaves: int, base_c
         total += amp
         amp *= persistence
     return (out / total).astype(_F32)
-
-
-def slope_deg(dem: np.ndarray, cell_size: float) -> np.ndarray:
-    """Slope in degrees via central differences. (P1's terrain.features is the canonical version.)"""
-    dz_dr, dz_dc = np.gradient(dem.astype(_F32, copy=False), cell_size)
-    return np.degrees(np.arctan(np.hypot(dz_dr, dz_dc))).astype(_F32)
 
 
 def passable_mask(dem: np.ndarray, true_class: np.ndarray, cell_size: float,
