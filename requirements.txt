@@ -1,0 +1,14 @@
+# ODYSSEY runtime dependencies (Python 3.10+)
+numpy
+scipy
+matplotlib
+pytest
+plotly
+streamlit
+rasterio
+opencv-python
+torch
+segmentation-models-pytorch
+datasets
+# NOTE: `noise` (Perlin) was dropped: no Windows wheel (needs MSVC to build).
+# world/synthetic.py uses its own vectorised fractal value noise instead.
