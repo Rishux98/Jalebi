@@ -11,7 +11,7 @@ Per target (disc of ``sci_target_radius`` cells):
     value_mean / value_std  bootstrap (``sci_bootstrap_n`` draws): bedrock ~ Bernoulli(P(bedrock)),
                             ice + N(0, sci_ice_noise_std), averaged over the disc
     info_gain               value_mean * mean(entropy / ln 4) over the disc ("worth looking at because uncertain")
-    utility                 value_mean - alpha * path_cost - beta * (1 - success_prob)
+    utility                 value_mean - alpha * path_cost / cell_size - beta * (1 - success_prob)
 
 Selection (``select_under_budget``): greedy by utility per Wh from the current position, re-planning
 from each chosen target; a target is feasible only if used + leg + (target -> goal) energy <= budget.
@@ -153,8 +153,14 @@ def detect_candidates(world: World, layers: TerrainLayers, belief: Belief, costm
     return targets
 
 
-def _utility(t: Target, leg: Plan, cfg: Config) -> float:
-    return t.value_mean - cfg.sci_alpha_per_cost * leg.total_cost - cfg.sci_beta_risk * (1.0 - leg.success_prob)
+def _utility(t: Target, leg: Plan, cfg: Config, cell_size: float = 1.0) -> float:
+    """value - alpha * (path cost per cell) - beta * (1 - P(success)).
+
+    Path cost is divided by ``cell_size`` so the penalty counts cells like P(success) does; otherwise a
+    4 m/cell site (HiRISE) pays 4x the distance penalty of a 1 m/cell site for the same number of cells.
+    """
+    return (t.value_mean - cfg.sci_alpha_per_cost * leg.total_cost / max(cell_size, 1e-9)
+            - cfg.sci_beta_risk * (1.0 - leg.success_prob))
 
 
 def plan_targets(targets: Sequence[Target], costmap: CostMap, rover_rc: RC, cfg: Config = DEFAULT,
@@ -167,7 +173,7 @@ def plan_targets(targets: Sequence[Target], costmap: CostMap, rover_rc: RC, cfg:
     for t in targets:
         leg = astar(costmap, rover_rc, t.rc, cell_size, rw, mode=f"target{t.id}")
         t.plan, t.reachable = leg, leg.found
-        t.utility = _utility(t, leg, cfg) if leg.found else float("-inf")
+        t.utility = _utility(t, leg, cfg, cell_size) if leg.found else float("-inf")
         if leg.found:
             t.reason = (f"#{t.id} at {t.rc}: value {t.value_mean:.2f} +/- {t.value_std:.2f}, info_gain "
                         f"{t.info_gain:.2f}; path {leg.length_m:.0f} m, {leg.energy_wh:.0f} Wh, P(success) "
@@ -209,7 +215,7 @@ def select_under_budget(targets: Sequence[Target], costmap: CostMap, belief: Bel
                 last[t.id] = {"why": "reachable", "pos": pos}
                 continue
             need = used + leg.energy_wh + ret.energy_wh
-            util = _utility(t, leg, cfg)
+            util = _utility(t, leg, cfg, cell_size)
             ratio = util / max(leg.energy_wh, 1e-6)
             last[t.id] = {"why": None, "pos": pos, "leg": leg, "ret": ret, "need": need, "util": util,
                           "ratio": ratio}

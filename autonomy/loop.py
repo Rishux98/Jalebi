@@ -130,6 +130,10 @@ class Rover:
         self.entropy_snapshots: dict[int, np.ndarray] = {}
         self.injected: list[dict] = []
         self.entered_true_hazard_cells = 0
+        self.n_looks = np.zeros(world.shape, np.int32)                 # navcam observations per cell
+        self.visited = np.zeros(world.shape, bool)                      # cells driven over
+        self.visited[world.start] = True
+        self.extra_looks = 0
         self._keep_logged: set[tuple] = set()
         self.path: list[RC] = []
         self.path_idx = 0
@@ -164,6 +168,7 @@ class Rover:
         self.belief.class_probs[sl] = post.class_probs
         self.belief.entropy[sl] = post.entropy
         self.belief.observed_mask[sl] = post.observed_mask
+        self.n_looks[sl] += mask
         return sl
 
     def _rebuild(self, sl: tuple[slice, slice]) -> np.ndarray:
@@ -182,25 +187,51 @@ class Rover:
 
     # ------------------------------------------------------------------ planning
     def _planning_map(self) -> CostMap:
-        """Cost map for planning: hazard_prob > hazard_prob_max is a hard limit; own cell kept passable."""
+        """Cost map for planning: hazard_prob > hazard_prob_max is a hard limit, except on cells the rover has
+        already driven over (its own wheels proved them traversable) — this lets it back out of a dead end."""
         cost = self.costmap.cost.copy()
-        cost[self.costmap.hazard_prob > self.cfg.hazard_prob_max] = np.inf
-        r, c = self.rc
-        if not np.isfinite(cost[r, c]):
-            fin = cost[np.isfinite(cost)]
-            cost[r, c] = float(fin.max()) if fin.size else 0.0
-        return CostMap(cost, self.costmap.hazard_prob, energy_wh_per_m=self.costmap.energy_wh_per_m)
+        cost[(self.costmap.hazard_prob > self.cfg.hazard_prob_max) & ~self.visited] = np.inf
+        return CostMap(self._effective_cost(cost), self.costmap.hazard_prob, energy_wh_per_m=self.costmap.energy_wh_per_m)
 
-    def _route(self, pm: CostMap) -> Plan:
+    def _effective_cost(self, cost: np.ndarray | None = None) -> np.ndarray:
+        """Cost with driven-over cells forced finite (worst finite cost): the rover has proof it can cross them."""
+        cost = self.costmap.cost.copy() if cost is None else cost
+        driven = self.visited & ~np.isfinite(cost)
+        if driven.any():
+            fin = cost[np.isfinite(cost)]
+            cost[driven] = float(fin.max()) if fin.size else 0.0
+        return cost
+
+    def _route(self, pm: CostMap, start: RC | None = None) -> Plan:
+        s = self.rc if start is None else start
         if self.targets:
-            return plan_via(pm, self.rc, self.waypoints, self.goal, self.cs, self.risk_weight, self.mode)
-        return astar(pm, self.rc, self.goal, self.cs, self.risk_weight, self.mode)
+            return plan_via(pm, s, self.waypoints, self.goal, self.cs, self.risk_weight, self.mode)
+        return astar(pm, s, self.goal, self.cs, self.risk_weight, self.mode)
+
+    def _route_or_retreat(self, pm: CostMap) -> Plan:
+        """Route from the current cell; if the rover itself is boxed in (first leg fails), back up along its own
+        track (up to ``loop_max_retreat`` cells) and plan from there. ``meta["retreat_cells"]`` records it."""
+        p = self._route(pm)
+        if p.found:
+            return p
+        leg = p.meta.get("failed_leg")
+        if leg is not None and tuple(leg[0]) != self.rc:
+            return p                                            # a later leg failed: that's a target problem
+        back: list[RC] = []
+        for cell in reversed(self.trajectory[-(int(self.cfg.loop_max_retreat) + 1):-1]):
+            back.append(cell)
+            q = self._route(pm, cell)
+            if q.found:
+                meta = {**q.meta, "retreat_cells": len(back)}
+                return evaluate_path(pm, [self.rc, *back, *q.path[1:]], self.cs, self.risk_weight, self.mode,
+                                     q.expanded_nodes, meta)
+        return p
 
     def _find_route(self) -> Plan | None:
         """Plan to the goal through remaining targets; drop (and log) targets that became unreachable."""
         pm = self._planning_map()
         while True:
-            p = self._route(pm)
+            p = self._route_or_retreat(pm)
             if p.found:
                 return p
             if self.targets and p.meta.get("reason") == "waypoint_unreachable":
@@ -233,7 +264,7 @@ class Rover:
     def _adopt(self, p: Plan) -> None:
         p.meta["step"] = self.step_idx
         self.plan, self.path, self.path_idx = p, list(p.path), 0
-        self.plan_cm = CostMap(self.costmap.cost.copy(), self.costmap.hazard_prob.copy())
+        self.plan_cm = CostMap(self._effective_cost(), np.where(self.visited, 0.0, self.costmap.hazard_prob))
         self.plans.append(p)
         self._keep_logged.clear()
 
@@ -260,7 +291,7 @@ class Rover:
             return None, None
         ahead = np.asarray(rem[1:], dtype=np.int64)
         r, c = ahead[:, 0], ahead[:, 1]
-        cm = self.costmap
+        cm = CostMap(self._effective_cost(), np.where(self.visited, 0.0, self.costmap.hazard_prob))
         old_cost = evaluate_path(self.plan_cm, rem, self.cs, self.risk_weight).total_cost
         new_cost = evaluate_path(cm, rem, self.cs, self.risk_weight).total_cost
         pct = (new_cost / old_cost - 1.0) if old_cost > 0 else 0.0
@@ -317,7 +348,8 @@ class Rover:
         if new is None:
             self._stop_no_route(extra=nums)
             return False
-        nums.update(new_success_prob=new.success_prob, new_length_m=new.length_m,
+        nums.update(retreat_cells=int(new.meta.get("retreat_cells", 0)), new_success_prob=new.success_prob,
+                    new_length_m=new.length_m,
                     new_route_cost=new.total_cost, expanded_nodes=new.expanded_nodes,
                     n_waypoints=len(self.targets))
         ev = make_evidence(trig["cell"], self.rc, trig["threshold"], trig["threshold_name"], **nums)
@@ -380,8 +412,44 @@ class Rover:
         self.path_idx += 1
         self.step_idx += 1
         self.trajectory.append(nxt)
+        self.visited[nxt] = True
         if int(self.world.true_class[nxt]) == BIG_ROCK:     # bookkeeping only (ground truth), never used to decide
             self.entered_true_hazard_cells += 1
+
+    def _look_before_step(self) -> None:
+        """If the next cell is doubtful (P(big_rock) > loop_caution_p or < loop_min_looks observations),
+        take up to ``loop_max_extra_looks`` extra navcam looks from the current cell (no motion), re-check the
+        route after each, and log one ``pause_and_sense`` entry with before/after numbers."""
+        cfg = self.cfg
+        nxt = self.path[self.path_idx + 1]
+        if self.visited[nxt]:
+            return
+        p0 = float(self.belief.class_probs[nxt][BIG_ROCK])
+        looks0 = int(self.n_looks[nxt])
+        if p0 <= cfg.loop_caution_p and looks0 >= cfg.loop_min_looks:
+            return
+        name, thr = (("loop_caution_p", cfg.loop_caution_p) if p0 > cfg.loop_caution_p
+                     else ("loop_min_looks", float(cfg.loop_min_looks)))
+        extra, replanned = 0, False
+        while extra < cfg.loop_max_extra_looks and not self.done:
+            sl = self._sense()
+            newly = self._rebuild(sl)
+            extra += 1
+            if newly.any():
+                self._log_hazard(sl, newly)
+            trig, _ = self._check()
+            if trig is not None:
+                replanned = self._replan(trig)
+                break
+            p = float(self.belief.class_probs[nxt][BIG_ROCK])
+            if p <= cfg.loop_caution_p and self.n_looks[nxt] >= cfg.loop_min_looks:
+                break
+        ev = make_evidence(nxt, self.rc, thr, name, p_big_rock_before=p0,
+                           p_big_rock_after=float(self.belief.class_probs[nxt][BIG_ROCK]), looks_before=looks0,
+                           looks_after=int(self.n_looks[nxt]), extra_looks=extra, replanned=int(replanned),
+                           **self._cell_ev(nxt))
+        self.log.record(self.step_idx, "uncertain_next_cell", "pause_and_sense", ev, confidence_at(self.belief, nxt))
+        self.extra_looks += extra
 
     def _frame(self, replanned: bool) -> None:
         self.frames.append({"step": self.step_idx, "rover_rc": self.rc, "path": self.path[self.path_idx:],
@@ -397,6 +465,9 @@ class Rover:
             return False
         if self.path_idx + 1 >= len(self.path):            # path exhausted but not at goal (should not happen)
             self._stop_no_route()
+            return False
+        self._look_before_step()
+        if self.done:
             return False
         self._move(self.path[self.path_idx + 1])
 
@@ -457,7 +528,8 @@ class Rover:
             steps=self.step_idx, energy_wh=self.energy_wh, distance_m=self.distance_m, replans=self.replans,
             frames=self.frames, entropy_snapshots=self.entropy_snapshots, belief=self.belief, costmap=self.costmap,
             meta={"mode": self.mode, "seed": self.seed, "injected": list(self.injected),
-                  "entered_true_hazard_cells": self.entered_true_hazard_cells, "runtime_s": round(runtime_s, 3)})
+                  "entered_true_hazard_cells": self.entered_true_hazard_cells, "extra_looks": self.extra_looks,
+                  "runtime_s": round(runtime_s, 3)})
 
     def run_to_goal(self, max_steps: int | None = None) -> RunResult:
         """Step until the goal is reached, no route exists, or ``max_steps`` (default ``loop_max_steps``)."""

@@ -130,6 +130,44 @@ def test_budget_drops_lowest_value_target():
     assert rover.plan.energy_wh <= budget
 
 
+def test_pause_and_sense_logged_with_numbers():
+    w = make_world(N, N, seed=3)
+    rover = Rover(w, DEFAULT, "balanced", seed=3, confusion=FALLBACK_CONFUSION)
+    rover.inject_hazard_on_path(0.4, 3)
+    res = rover.run_to_goal()
+    pauses = res.log.by_decision("pause_and_sense")
+    assert pauses and res.meta["extra_looks"] >= len(pauses)
+    for e in pauses:
+        ev = e.evidence
+        assert ev["threshold_name"] in ("loop_caution_p", "loop_min_looks")
+        assert 1 <= ev["extra_looks"] <= DEFAULT.loop_max_extra_looks and ev["looks_after"] > ev["looks_before"]
+        assert f"{ev['p_big_rock_before']:.2f} -> {ev['p_big_rock_after']:.2f}" in e.reason
+
+
+def test_retreat_out_of_dead_end():
+    """Rover boxed in by boulders it discovered backs up along its own track instead of stopping."""
+    w = make_world(N, N, seed=3)
+    rover = Rover(w, DEFAULT, "balanced", seed=3, confusion=FALLBACK_CONFUSION)
+    rover.step()
+    while abs(rover.rc[0] - rover.trajectory[-2][0]) + abs(rover.rc[1] - rover.trajectory[-2][1]) != 2:
+        rover.step()                                   # stop right after a diagonal move
+    here, prev = rover.rc, rover.trajectory[-2]
+    # belief: every neighbour except the cell it came from is a certain boulder -> no forward route
+    r, c = here
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            nb = (r + dr, c + dc)
+            if (dr or dc) and nb != prev and 0 <= nb[0] < N and 0 <= nb[1] < N:
+                rover.belief.class_probs[nb] = [0.0, 0.0, 0.0, 1.0]
+                rover.costmap.cost[nb] = np.inf
+                rover.costmap.hazard_prob[nb] = 0.5
+    rover.costmap.cost[prev] = np.inf                  # even the way back now *looks* blocked
+    # A* alone cannot leave: the only free neighbour is diagonal with both orthogonals blocked (no corner cutting)
+    p = rover._find_route()
+    assert p is not None and p.meta["retreat_cells"] >= 1 and p.path[1] == prev
+    assert p.path[0] == here and p.path[-1] == w.goal
+
+
 def test_inject_needs_room():
     w = make_world(N, N, seed=3)
     rover = Rover(w, DEFAULT, "balanced", seed=3, confusion=FALLBACK_CONFUSION)

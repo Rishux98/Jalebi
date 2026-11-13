@@ -83,3 +83,9 @@ def test_app_click_through():
     assert not at.exception
     at.sidebar.button(key="plan_btn").click().run()
     assert not at.exception
+    from world.real_dem import default_tile_available
+    if default_tile_available():                                       # real HiRISE terrain end-to-end
+        at.sidebar.selectbox(key="source").select("HiRISE south-polar DTM").run()
+        assert not at.exception
+        at.sidebar.button(key="inject_btn").click().run()
+        assert not at.exception

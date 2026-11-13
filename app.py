@@ -17,6 +17,7 @@ from core.config import DEFAULT
 from core.types import CLASS_NAMES, N_CLASSES
 from ui import figures as F
 from ui.pipeline import MODES, build_routes, build_science, build_site, make_cfg, run_traverse
+from world.real_dem import default_tile_available
 
 ROOT = Path(__file__).resolve().parent
 st.set_page_config(page_title="ODYSSEY · MARS-09", page_icon="🛰️", layout="wide")
@@ -24,26 +25,29 @@ st.set_page_config(page_title="ODYSSEY · MARS-09", page_icon="🛰️", layout=
 
 # =========================================================================== cached pipeline
 @st.cache_resource(show_spinner="Building site: DEM, terrain layers, orbital prior…", max_entries=8)
-def get_site(size: int, seed: int, lam: float, budget: float, radius: int):
-    return build_site(size, seed, make_cfg(lam, budget, radius))
+def get_site(src: str, size: int, seed: int, lam: float, budget: float, radius: int):
+    """``budget`` is a multiple of the direct balanced route's energy (works for any site size)."""
+    return build_site(size, seed, make_cfg(lam, DEFAULT.sci_energy_budget_wh, radius), source=src,
+                      budget_factor=budget)
 
 
 @st.cache_resource(show_spinner="Ranking science targets…", max_entries=8)
-def get_science(size: int, seed: int, lam: float, budget: float, radius: int):
-    return build_science(get_site(size, seed, lam, budget, radius))
+def get_science(src: str, size: int, seed: int, lam: float, budget: float, radius: int):
+    return build_science(get_site(src, size, seed, lam, budget, radius))
 
 
 @st.cache_resource(show_spinner="Planning route options + risk sweep…", max_entries=8)
-def get_routes(size: int, seed: int, lam: float, budget: float, radius: int):
-    return build_routes(get_site(size, seed, lam, budget, radius), get_science(size, seed, lam, budget, radius))
+def get_routes(src: str, size: int, seed: int, lam: float, budget: float, radius: int):
+    return build_routes(get_site(src, size, seed, lam, budget, radius),
+                        get_science(src, size, seed, lam, budget, radius))
 
 
 @st.cache_resource(show_spinner="Driving the rover…", max_entries=16)
-def get_traverse(size: int, seed: int, lam: float, budget: float, radius: int, mode: str, inject: bool,
+def get_traverse(src: str, size: int, seed: int, lam: float, budget: float, radius: int, mode: str, inject: bool,
                  frac: float, hz_radius: float):
-    site = get_site(size, seed, lam, budget, radius)
+    site = get_site(src, size, seed, lam, budget, radius)
     return run_traverse(size, seed, site.cfg, mode, inject, frac, hz_radius, site,
-                        get_science(size, seed, lam, budget, radius))
+                        get_science(src, size, seed, lam, budget, radius), source=src)
 
 
 def _json_safe(d: dict) -> dict:
@@ -54,18 +58,24 @@ def _json_safe(d: dict) -> dict:
 st.session_state.setdefault("run", None)          # None | "traverse" | "inject"
 with st.sidebar:
     st.markdown("### 🛰️ ODYSSEY · MARS-09")
-    source = st.selectbox("World source", ["Synthetic", "HiRISE tile (P6)"], key="source",
-                          help="Real HiRISE DEM tiles arrive in P6.")
-    if source != "Synthetic":
-        st.info("HiRISE tiles are not wired in yet (P6) — showing the synthetic site.")
+    sources = ["Synthetic"] + (["HiRISE south-polar DTM"] if default_tile_available() else [])
+    source = st.selectbox("World source", sources, key="source",
+                          help="HiRISE: real elevation (USGS controlled DTM crop, 1.2 km); terrain classes and ice "
+                               "are derived from its slope/roughness/curvature (documented assumption).")
+    src = "hirise" if source.startswith("HiRISE") else "synthetic"
+    if not default_tile_available():
+        st.caption("HiRISE crop missing — run `python -m world.real_dem` to fetch it (~1 MB).")
     c1, c2 = st.columns(2)
     seed = c1.number_input("Seed", 0, 9999, DEFAULT.seed, key="seed")
-    size = c2.selectbox("Map size", [64, 100, 150, 200], index=3, key="size", help="cells per side (1 m cells)")
+    size = c2.selectbox("Map size", [64, 100, 150, 200], index=3, key="size", disabled=src == "hirise",
+                        help="cells per side (1 m cells); HiRISE tile is fixed at 300×300 cells of ~4 m")
     mode = st.selectbox("Planner mode", MODES, index=1, key="mode",
                         help="science = balanced weights routed through budget-selected targets")
     lam = st.slider("λ uncertainty weight", 0.0, 5.0, float(DEFAULT.lambda_unc), 0.25, key="lam",
                     help="cost weight of belief entropy (avoid unknown terrain)")
-    budget = st.slider("Energy budget (Wh)", 400, 2000, int(DEFAULT.sci_energy_budget_wh), 50, key="budget")
+    budget = st.slider("Energy budget (× direct route)", 1.0, 3.0, 1.45, 0.05, key="budget",
+                       help="Budget = this × energy of the balanced direct start→goal route; the extra pays for "
+                            "science detours. 1.45× ≈ 800 Wh on the 200×200 synthetic site.")
     radius = st.slider("Sensor radius (cells)", 3, 12, int(DEFAULT.sensor_radius), key="radius")
     with st.expander("Hidden hazard"):
         frac = st.slider("Position along route", 0.1, 0.9, 0.4, 0.05, key="frac")
@@ -78,10 +88,13 @@ with st.sidebar:
     if st.button("💥 Inject hazard on path", key="inject_btn", width="stretch",
                  help="Plant a hidden boulder field on the planned route, then drive. The rover is not told."):
         st.session_state.run = "inject"
+    _s = get_site(src, int(size), int(seed), float(lam), float(budget), int(radius))
+    st.caption(f"Energy budget = {budget:.2f} × {_s.direct_energy_wh:.0f} Wh (direct route) = "
+               f"**{_s.cfg.sci_energy_budget_wh:.0f} Wh**")
     st.caption("Sensor model: " + ("trained AI4MARS confusion matrix" if (ROOT / DEFAULT.confusion_path).exists()
                                    else "fallback confusion matrix (train on Colab for the real one)"))
 
-args = (int(size), int(seed), float(lam), float(budget), int(radius))
+args = (src, int(size), int(seed), float(lam), float(budget), int(radius))
 site = get_site(*args)
 sci = get_science(*args)
 routes = get_routes(*args)
@@ -94,17 +107,20 @@ plan = routes.modes.get(mode) or routes.modes["balanced"]
 
 # =========================================================================== header
 st.markdown("## ODYSSEY — autonomous traverse planning under uncertainty")
+H, W = world.shape
+site_txt = (f"{world.name} · {H}×{W} cells @ {world.cell_size:.2f} m ({H * world.cell_size:.0f}×"
+            f"{W * world.cell_size:.0f} m) · seed {world.seed}")
 if res is None:
-    st.caption(f"Site {size}×{size} m · seed {world.seed} · start {world.start} → goal {world.goal} · "
+    st.caption(f"{site_txt} · start {world.start} → goal {world.goal} · "
                f"mode **{mode}** · planning view (press **Run traverse** or **Inject hazard on path**)")
 else:
-    st.caption(f"Site {size}×{size} m · seed {world.seed} · mode **{res.meta['mode']}** · "
+    st.caption(f"{site_txt} · mode **{res.meta['mode']}** · "
                f"{'with injected hazard — ' + trav.note if st.session_state.run == 'inject' else 'no injected hazard'}")
 
 m = st.columns(6)
 if res is None:
     m[0].metric("Route length", f"{plan.length_m:.0f} m")
-    m[1].metric("Energy", f"{plan.energy_wh:.0f} Wh", f"{plan.energy_wh - budget:+.0f} vs budget", delta_color="inverse")
+    m[1].metric("Energy", f"{plan.energy_wh:.0f} Wh", f"{plan.energy_wh - cfg.sci_energy_budget_wh:+.0f} vs budget", delta_color="inverse")
     m[2].metric("P(success) belief", f"{plan.success_prob:.1%}")
     m[3].metric("P(success) truth", f"{plan.meta.get('success_prob_true', float('nan')):.1%}",
                 help="Evaluation only: the same route scored on the hidden ground truth.")
@@ -113,7 +129,7 @@ if res is None:
 else:
     m[0].metric("Goal", "reached ✅" if res.reached_goal else "stopped ⛔")
     m[1].metric("Driven", f"{res.distance_m:.0f} m", f"{res.steps} steps", delta_color="off")
-    m[2].metric("Energy", f"{res.energy_wh:.0f} Wh", f"{res.energy_wh - budget:+.0f} vs budget", delta_color="inverse")
+    m[2].metric("Energy", f"{res.energy_wh:.0f} Wh", f"{res.energy_wh - cfg.sci_energy_budget_wh:+.0f} vs budget", delta_color="inverse")
     m[3].metric("Replans", res.replans)
     m[4].metric("P(success) initial plan", f"{res.plans[0].success_prob:.1%}" if res.plans else "—")
     m[5].metric("Boulder cells entered", res.meta["entered_true_hazard_cells"],
@@ -196,8 +212,8 @@ with tabs[1]:
                                    float(np.percentile(site.layers.slope_deg, 99.5)), height=460), key="slope")
     st.markdown("**Cell inspector**")
     i1, i2, i3 = st.columns([1, 1, 4])
-    r = i1.number_input("row", 0, size - 1, world.goal[0] // 2, key="insp_r")
-    c = i2.number_input("col", 0, size - 1, world.goal[1] // 2, key="insp_c")
+    r = i1.number_input("row", 0, H - 1, world.goal[0] // 2, key=f"insp_r-{src}-{size}")
+    c = i2.number_input("col", 0, W - 1, world.goal[1] // 2, key=f"insp_c-{src}-{size}")
     belief_now = res.belief if res is not None and cm is res.costmap else site.belief
     bd = cm.breakdown((int(r), int(c)))
     bd.update({f"P({n})": float(belief_now.class_probs[int(r), int(c), k]) for k, n in enumerate(CLASS_NAMES)})
@@ -303,7 +319,7 @@ with tabs[5]:
     counts = log.counts()
     all_dec = sorted(counts)
     default = [d for d in all_dec if d != "hazard_detected"] or all_dec
-    lkey = f"{st.session_state.run}-{mode}-{seed}-{size}-{lam}-{budget}-{radius}-{frac}-{hz_radius}"  # fresh widgets per log
+    lkey = f"{st.session_state.run}-{src}-{mode}-{seed}-{size}-{lam}-{budget}-{radius}-{frac}-{hz_radius}"  # fresh widgets per log
     show = st.multiselect("Decisions", all_dec, default=default, key=f"log_filter-{lkey}",
                           format_func=lambda d: f"{d} ({counts[d]})")
     entries = [e for e in log if e.decision in show]
@@ -334,9 +350,9 @@ with tabs[5]:
         st.json(_json_safe(chosen.evidence), expanded=True)
     st.markdown("**Decisions about one cell**")
     l1, l2, l3 = st.columns([1, 1, 4])
-    lr = l1.number_input("row", 0, size - 1, int(chosen.evidence["cell"][0]) if chosen else 0,
+    lr = l1.number_input("row", 0, H - 1, int(chosen.evidence["cell"][0]) if chosen else 0,
                         key=f"log_r-{lkey}-{id(chosen)}")
-    lc = l2.number_input("col", 0, size - 1, int(chosen.evidence["cell"][1]) if chosen else 0,
+    lc = l2.number_input("col", 0, W - 1, int(chosen.evidence["cell"][1]) if chosen else 0,
                         key=f"log_c-{lkey}-{id(chosen)}")
     hits = log.entries_for_cell(int(lr), int(lc))
     l3.write(f"{len(hits)} decision(s) at ({lr}, {lc})")

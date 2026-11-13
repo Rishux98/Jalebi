@@ -120,7 +120,8 @@ def _replan_trigger(ev: dict) -> str:
 
 
 def reason_replan(ev: dict) -> str:
-    return (f"Replan at {tuple(ev['rover_rc'])}: {_replan_trigger(ev)}; old route P(success)="
+    back = f"; backs up {ev['retreat_cells']} cell(s) along its own track" if ev.get("retreat_cells") else ""
+    return (f"Replan at {tuple(ev['rover_rc'])}: {_replan_trigger(ev)}{back}; old route P(success)="
             f"{ev['old_success_prob']:.1%} over {ev['old_length_m']:.0f} m -> new route "
             f"{ev['new_success_prob']:.1%} over {ev['new_length_m']:.0f} m")
 
@@ -174,7 +175,16 @@ def reason_stop(ev: dict) -> str:
             f"({ev['n_impassable']} impassable cells known)")
 
 
+def reason_pause_and_sense(ev: dict) -> str:
+    why = (f"P(big_rock)={ev['p_big_rock_before']:.2f} > {ev['threshold']:.2f}" if ev["threshold_name"] == "loop_caution_p"
+           else f"only {ev['looks_before']} look(s) < {ev['threshold']:.0f}")
+    return (f"Pause at {tuple(ev['rover_rc'])}: next cell {_cell(ev)} {why} -> {ev['extra_looks']} extra look(s): "
+            f"P(big_rock) {ev['p_big_rock_before']:.2f} -> {ev['p_big_rock_after']:.2f}, looks "
+            f"{ev['looks_before']} -> {ev['looks_after']}{'; route replanned' if ev['replanned'] else ''}")
+
+
 REASONS: dict[str, Callable[[dict], str]] = {
+    "pause_and_sense": reason_pause_and_sense,
     "plan": reason_plan,
     "replan": reason_replan,
     "keep_path": reason_keep_path,

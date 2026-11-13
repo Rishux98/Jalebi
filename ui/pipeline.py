@@ -44,6 +44,7 @@ class Site:
     confusion: np.ndarray
     confusion_source: str
     cfg: Config
+    direct_energy_wh: float = 0.0  # balanced start->goal plan energy (budget reference)
 
 
 @dataclass
@@ -62,14 +63,30 @@ class Traverse:
     note: str = ""
 
 
-def build_site(size: int, seed: int, cfg: Config) -> Site:
-    w = make_world(size, size, seed=seed, cfg=cfg)
+def new_world(size: int, seed: int, cfg: Config, source: str = "synthetic") -> World:
+    """Fresh World: procedural synthetic site, or the real HiRISE crop (``source="hirise"``; size ignored)."""
+    if source == "hirise":
+        from world.real_dem import load_world
+        return load_world(cfg=cfg, seed=seed)
+    return make_world(size, size, seed=seed, cfg=cfg)
+
+
+def build_site(size: int, seed: int, cfg: Config, source: str = "synthetic",
+               budget_factor: float | None = None) -> Site:
+    """Site + belief. If ``budget_factor`` is given, the energy budget becomes
+    ``budget_factor * energy of the balanced direct start->goal plan`` (site-size independent)."""
+    from planner.astar import astar
+
+    w = new_world(size, seed, cfg, source)
     L = compute_layers(w, cfg)
     C, src = load_confusion(cfg=cfg)
     prior = init_prior(w, cfg, seed)
     b = sense(prior, w, w.start, np.random.default_rng(seed), cfg, C)
-    return Site(w, L, prior, b, costmap_from_belief(L, b, cfg),
-                build_costmap(L, one_hot_probs(w.true_class), cfg), C, src, cfg)
+    cm = costmap_from_belief(L, b, cfg)
+    direct = astar(cm, w.start, w.goal, w.cell_size, cfg.pareto_risk_balanced).energy_wh
+    if budget_factor is not None:
+        cfg = cfg.replace(sci_energy_budget_wh=float(budget_factor) * direct)
+    return Site(w, L, prior, b, cm, build_costmap(L, one_hot_probs(w.true_class), cfg), C, src, cfg, direct)
 
 
 def build_science(site: Site) -> Science:
@@ -92,9 +109,9 @@ def build_routes(site: Site, science: Science) -> ParetoResult:
 
 
 def run_traverse(size: int, seed: int, cfg: Config, mode: str, inject: bool, frac: float, radius: float,
-                 site: Site, science: Science) -> Traverse:
+                 site: Site, science: Science, source: str = "synthetic") -> Traverse:
     """Drive the rover from start to goal in a fresh copy of the site's world."""
-    w = make_world(size, size, seed=seed, cfg=cfg)
+    w = new_world(size, seed, cfg, source)
     targets = [Target(**{**t.__dict__}) for t in science.selection.selected] if mode == "science" else []
     rover = Rover(w, cfg, mode, seed=seed, confusion=site.confusion, targets=targets, layers=site.layers,
                   belief=site.prior)

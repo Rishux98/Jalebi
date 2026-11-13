@@ -116,6 +116,17 @@ class Config:
     loop_near_frac: float = 0.5         # log keep_path when a check reaches this fraction of its threshold
     loop_max_steps: int = 2000          # safety cap on autonomy-loop steps
     loop_snapshot_every: int = 10       # steps between stored belief-entropy snapshots (dashboard slider)
+    loop_caution_p: float = 0.01        # look before stepping if next cell's P(big_rock) exceeds this ...
+                                        # (16 runs, seeds 3/7/11/42 x synthetic/HiRISE x balanced/science, hidden
+                                        #  hazard: boulder cells entered off=14, 0.1->7, 0.01->2; same goal rate)
+    loop_min_looks: int = 4             # ... or it has been observed fewer times than this
+    loop_max_extra_looks: int = 3       # max extra navcam looks from the same spot before moving on
+    loop_max_retreat: int = 15          # cells the rover may back up along its own track to escape a dead end
+
+    # ---- real HiRISE world (P6; classes/ice derived from real geometry — documented assumption)
+    real_max_size: int = 300            # cells; DTM window is block-mean downsampled to <= this per side
+    real_sand_pct: float = 12.0         # percentile of (dem - large-scale trend) below which gentle cells = sand
+    real_rock_pct: float = 1.0          # % roughest cells that seed boulder clusters
 
     # ---- synthetic world generator
     gen_noise_octaves: int = 5          # fractal value-noise octaves
