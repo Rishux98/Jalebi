@@ -58,6 +58,20 @@ class Config:
     mc_samples: int = 30                # Monte-Carlo draws for P(slope > limit)
     mc_max_bytes: float = 200e6         # memory cap per Monte-Carlo batch
 
+    # ---- perception (P2; training runs on Colab GPU)
+    confusion_path: str = "perception/confusion.npy"  # 4x4 row-normalised P(pred | true)
+    percep_img_size: int = 256          # px, square resize
+    percep_n_train: int = 2000          # streamed labelled train images
+    percep_n_val: int = 322             # val = full AI4MARS test_min3 split (3-labeller agreement)
+    percep_epochs: int = 8
+    percep_batch: int = 16
+    percep_lr: float = 3e-4
+    percep_weight_decay: float = 1e-4   # AdamW
+    percep_class_weight_power: float = 0.5  # CE weight ∝ class_freq^-power (rare big_rock up-weighted)
+    percep_n_samples: int = 6           # sample PNGs written by perception/infer.py
+    percep_dropout: float = 0.2         # Dropout2d before the seg head (MC-dropout)
+    percep_mc_passes: int = 15          # T stochastic forward passes at inference
+
     # ---- sensing / autonomy
     sensor_radius: int = 6              # cells
     hazard_prob_max: float = 0.3        # replan if a path cell exceeds this
