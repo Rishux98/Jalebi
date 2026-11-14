@@ -100,6 +100,22 @@ def test_app_click_through():
     at.sidebar.toggle(key="loop").set_value(True).run()                # loop: repeated frames + JS hook
     assert not at.exception and not at.error
     at.sidebar.radio(key="movement").set_value("8-way (diagonals)").run()
+    # manual obstacles: place one on the route centre, drive, then the Replans tab compares before/after
+    at.sidebar.radio(key="placement").set_value("Manual (choose cells)").run()
+    assert not at.exception and not at.error
+    assert at.sidebar.button(key="manual_btn").disabled                # nothing placed yet
+    at.sidebar.slider(key="obs_r-64").set_value(32).run()
+    at.sidebar.slider(key="obs_c-64").set_value(32).run()
+    at.sidebar.button(key="obs_add").click().run()
+    assert at.session_state.obstacles == [(32, 32, 3, "big_rock")]
+    at.sidebar.button(key="manual_btn").click().run()
+    assert not at.exception and not at.error, [e.value for e in at.error]
+    assert any("user obstacle" in str(m.value) for m in at.markdown)
+    assert any("Before R1" in str(m.value) for m in at.markdown) or \
+        any("No replans" in str(m.value) for m in at.success)
+    at.sidebar.button(key="obs_clear").click().run()
+    at.sidebar.radio(key="placement").set_value("Auto (on planned route)").run()
+    assert not at.exception
     from world.real_dem import default_tile_available
     if default_tile_available():                                       # real HiRISE terrain end-to-end
         at.sidebar.selectbox(key="source").select("HiRISE south-polar DTM").run()

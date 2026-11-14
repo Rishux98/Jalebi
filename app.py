@@ -74,15 +74,15 @@ def get_routes(src: str, size: int, seed: int, lam: float, budget: float, radius
 
 @st.cache_resource(show_spinner="Driving the rover…", max_entries=16)
 def get_traverse(src: str, size: int, seed: int, lam: float, budget: float, radius: int, conn: int, mode: str,
-                 inject: bool, frac: float, hz_radius: float):
+                 inject: bool, frac: float, hz_radius: float, obstacles: tuple = ()):
     site = get_site(src, size, seed, lam, budget, radius, conn)
     return run_traverse(size, seed, site.cfg, mode, inject, frac, hz_radius, site,
-                        get_science(src, size, seed, lam, budget, radius, conn), source=src)
+                        get_science(src, size, seed, lam, budget, radius, conn), source=src, obstacles=obstacles)
 
 
 @st.cache_data(show_spinner="Building rover animation…", max_entries=24)
 def get_animation(args: tuple, mode: str, run: str, frac: float, hz_radius: float, view: str, cm_state: str,
-                  loop: bool, cost_zmax: float):
+                  loop: bool, cost_zmax: float, obstacles: tuple = ()):
     """Animated figure (3-D terrain or 2-D cost map) for the planned path or the driven trajectory.
     Cached on every setting that changes it (seed, size, mode, λ, budget, radius, movement, hazard, view)."""
     site, routes = get_site(*args), get_routes(*args)
@@ -92,7 +92,7 @@ def get_animation(args: tuple, mode: str, run: str, frac: float, hz_radius: floa
         belief, cm = site.belief, site.costmap
         world = site.world
     else:
-        tr = get_traverse(*args, mode, run == "inject", frac, hz_radius)
+        tr = get_traverse(*args, mode, run == "inject", frac, hz_radius, obstacles)
         res = tr.result
         path, entries, ghost, label = res.trajectory, res.log.by_decision("replan"), res.plans[0].path, "Driven"
         belief, cm, world = res.belief, res.costmap, tr.world
@@ -126,7 +126,7 @@ MAP_LEGEND = [("path", F.PATH), ("safe", F.SAFE), ("caution", F.CAUTION), ("haza
               ("unknown", F.UNKNOWN), ("science target ★", F.SCIENCE)]
 
 # =========================================================================== sidebar
-st.session_state.setdefault("run", None)          # None (idle) | "plan" | "traverse" | "inject"
+st.session_state.setdefault("run", None)          # None (idle) | "plan" | "traverse" | "inject" | "manual"
 sensor = get_sensor_info()
 with st.sidebar:
     st.markdown("### 🛰️ ODYSSEY · MARS-09")
@@ -158,20 +158,55 @@ with st.sidebar:
                         key="movement", help="4-way: the rover moves only up/down/left/right — simpler, grid-aligned "
                                              "routes (Manhattan distance), usually a little longer.")
     conn = 4 if movement.startswith("4") else 8
-    with st.expander("💥 Hidden hazard"):
-        frac = st.slider("Position along route", 0.1, 0.9, 0.4, 0.05, key="frac")
-        hz_radius = st.slider("Boulder-field radius (cells)", 1, 6, 3, key="hz_radius")
+    _s = get_site(src, int(size), int(seed), float(lam), float(budget), int(radius), conn)
+    Hs, Ws = _s.world.shape
+    st.session_state.setdefault("obstacles", [])
+    with st.expander("💥 Hidden hazard / obstacles",
+                     expanded=str(st.session_state.get("placement", "")).startswith("Manual")):
+        placement = st.radio("Placement", ["Auto (on planned route)", "Manual (choose cells)"], key="placement",
+                             help="Auto: one boulder field on the planned route. Manual: you choose where hidden "
+                                  "boulder fields / sand traps go. The rover is never told — it must discover them.")
+        manual = placement.startswith("Manual")
+        if not manual:
+            frac = st.slider("Position along route", 0.1, 0.9, 0.4, 0.05, key="frac")
+            hz_radius = st.slider("Boulder-field radius (cells)", 1, 6, 3, key="hz_radius")
+        else:
+            frac, hz_radius = float(st.session_state.get("frac", 0.4)), int(st.session_state.get("hz_radius", 3))
+            st.selectbox("Obstacle type", ["big_rock", "sand"], key="obs_kind",
+                         format_func=lambda k: "🪨 boulder field (impassable)" if k == "big_rock"
+                         else "🏜️ sand trap (costly, risky)")
+            st.slider("Vertical (row)", 0, Hs - 1, Hs // 2, key=f"obs_r-{Hs}")
+            st.slider("Horizontal (column)", 0, Ws - 1, Ws // 2, key=f"obs_c-{Ws}")
+            st.slider("Radius (cells)", 1, 8, 3, key="obs_rad")
+            st.caption("Dotted amber ring on the Mission map = where it will go (press Plan to see the route).")
+
+            def _add_obstacle() -> None:
+                st.session_state.obstacles.append((int(st.session_state[f"obs_r-{Hs}"]),
+                                                   int(st.session_state[f"obs_c-{Ws}"]),
+                                                   int(st.session_state.obs_rad), st.session_state.obs_kind))
+
+            o1, o2 = st.columns(2)
+            o1.button("➕ Add", key="obs_add", width="stretch", on_click=_add_obstacle)
+            o2.button("🗑 Clear", key="obs_clear", width="stretch", on_click=lambda: st.session_state.obstacles.clear())
+            for i, (r_, c_, rad_, k_) in enumerate(st.session_state.obstacles, 1):
+                st.caption(f"{i}. {'🪨 boulders' if k_ == 'big_rock' else '🏜️ sand'} at ({r_}, {c_}) r={rad_}")
+            if not st.session_state.obstacles:
+                st.caption("No obstacles yet — set a cell and press ➕ Add.")
     b1, b2 = st.columns(2)
     if b1.button("Plan", key="plan_btn", width="stretch"):
         st.session_state.run = "plan"
     if b2.button("Run traverse", key="run_btn", type="primary", width="stretch"):
         st.session_state.run = "traverse"
-    if st.button("💥 Inject hazard on path", key="inject_btn", width="stretch",
-                 help="Plant a hidden boulder field on the planned route, then drive. The rover is not told."):
-        st.session_state.run = "inject"
+    if not manual:
+        if st.button("💥 Inject hazard on path", key="inject_btn", width="stretch",
+                     help="Plant a hidden boulder field on the planned route, then drive. The rover is not told."):
+            st.session_state.run = "inject"
+    elif st.button(f"💥 Drive with my obstacles ({len(st.session_state.obstacles)})", key="manual_btn",
+                   width="stretch", disabled=not st.session_state.obstacles,
+                   help="Plant your obstacles as hidden ground truth, then drive. The rover is not told."):
+        st.session_state.run = "manual"
     loop = st.toggle("🔁 Loop animation", key="loop", help="Off: plays once. On: frames repeat and the player "
                                                           "restarts automatically when it reaches the end.")
-    _s = get_site(src, int(size), int(seed), float(lam), float(budget), int(radius), conn)
     st.caption(f"Energy budget = {budget:.2f} × {_s.direct_energy_wh:.0f} Wh (direct route) = "
                f"**{_s.cfg.sci_energy_budget_wh:.0f} Wh**")
     if sensor["source"] == "trained":
@@ -187,11 +222,12 @@ site = get_site(*args)
 world, cfg = site.world, site.cfg
 H, W = world.shape
 sci = routes = trav = res = plan = None
+OBST = tuple(st.session_state.obstacles) if run == "manual" else ()      # user obstacles used by this drive
 if run is not None:
     sci, routes = get_science(*args), get_routes(*args)
     plan = routes.modes.get(mode) or routes.modes["balanced"]
-    if run in ("traverse", "inject"):
-        trav = get_traverse(*args, mode, run == "inject", float(frac), float(hz_radius))
+    if run in ("traverse", "inject", "manual"):
+        trav = get_traverse(*args, mode, run == "inject", float(frac), float(hz_radius), OBST)
         res = trav.result
 
 # =========================================================================== map view (pan / zoom)
@@ -277,7 +313,7 @@ st.markdown(chip("world", f"{world.name} · {H}×{W} @ {world.cell_size:.2f} m")
             + chip("sensor", "trained" if sensor["source"] == "trained" else "fallback",
                    "ok" if sensor["source"] == "trained" else "warn")
             + chip("mission", state, state_kind)
-            + (chip("hazard", trav.note, "warn") if run == "inject" and trav is not None else ""),
+            + (chip("hazard", trav.note, "warn") if run in ("inject", "manual") and trav is not None else ""),
             unsafe_allow_html=True)
 
 if run is None:
@@ -342,7 +378,7 @@ def tab_mission() -> None:
     with left:
         st.markdown("##### 🚀 " + ("Planned route — press ▶ Play" if res is None else
                                    "Driven trajectory (planned path ghosted) — press ▶ Play"))
-        show(get_animation(args, mode, anim_run, float(frac), float(hz_radius), "3d", "after", loop, COST_ZMAX),
+        show(get_animation(args, mode, anim_run, float(frac), float(hz_radius), "3d", "after", loop, COST_ZMAX, OBST),
              "mission3d")
         legend([("rover / driven path", F.PATH), ("remaining", "rgba(0,229,255,.4)"), ("replan", F.HAZARD),
                 ("planned (ghost)", "#cfcfcf")])
@@ -354,9 +390,19 @@ def tab_mission() -> None:
                 F.add_path(fig, p.path, f"{n} ({p.length_m:.0f} m, {p.success_prob:.0%})", F.ROUTE_COLORS[n],
                            "solid" if n == mode else "dash", 3.5 if n == mode else 2)
             F.add_points(fig, [t.rc for t in sci.selection.selected], "science target", F.SCIENCE, F.TARGET_SYMBOL, 13)
+            if manual:
+                F.add_rings(fig, [{"rc": [r_, c_], "radius": rad_, "kind": k_}
+                                  for r_, c_, rad_, k_ in st.session_state.obstacles], "your obstacles", dash="dash")
+                F.add_rings(fig, [{"rc": [int(st.session_state[f"obs_r-{Hs}"]), int(st.session_state[f"obs_c-{Ws}"])],
+                                   "radius": int(st.session_state.obs_rad), "kind": st.session_state.obs_kind}],
+                            "placing (not added yet)", color=F.CAUTION, dash="dot")
             F.add_start_goal(fig, world)
             show(fig, "mission2d")
-            legend(MAP_LEGEND)
+            legend(MAP_LEGEND + ([("your obstacle (boulders)", F.HAZARD), ("your obstacle (sand)", F.CAUTION)]
+                                 if manual else []))
+            if manual:
+                st.caption(f"{len(st.session_state.obstacles)} obstacle(s) placed. Move the sliders to position the "
+                           "dotted ring, press ➕ Add, then **💥 Drive with my obstacles**.")
         else:
             st.markdown("##### 🗺️ Traverse overview")
             fig = F.shaded_map(trav.world, "", 560, res.belief.entropy, None, "uncertainty (nats)", hmax)
@@ -365,14 +411,126 @@ def tab_mission() -> None:
                 F.add_path(fig, res.plans[0].path, "planned", "#cfcfcf", "dot", 2)
             F.add_path(fig, res.trajectory, "driven", F.PATH, "solid", 3)
             reps = res.log.by_decision("replan")
-            F.add_points(fig, [tuple(e.evidence["rover_rc"]) for e in reps], "replan", F.HAZARD, "diamond", 12,
-                         [f"step {e.step}" for e in reps])
+            F.add_labeled_points(fig, [tuple(e.evidence["rover_rc"]) for e in reps],
+                                 [f"R{i}" for i in range(1, len(reps) + 1)], "replan", F.HAZARD, "diamond", 10,
+                                 [f"R{i} · step {e.step} · {e.reason}" for i, e in enumerate(reps, 1)])
             F.add_points(fig, [t.rc for t in trav.targets], "science target", F.SCIENCE, F.TARGET_SYMBOL, 13)
             F.add_start_goal(fig, trav.world)
             show(fig, "mission2d")
             legend(MAP_LEGEND)
+            if reps:
+                st.caption(f"{len(reps)} replans (R1…R{len(reps)}). Open the **🔀 Replans** tab to compare each "
+                           "route before vs after, zoomed on the trigger.")
             for e in [e for e in res.log if e.decision in ("replan", "pause_and_sense", "goal_reached", "stop")][-4:]:
                 st.markdown(f"`s{e.step}` **{BADGE.get(e.decision, e.decision)}** — {e.reason}")
+
+
+def _old_remaining(old_path: list, rover_rc: tuple) -> list:
+    """Part of the previous plan still ahead of the rover when the replan happened."""
+    return old_path[old_path.index(rover_rc):] if rover_rc in old_path else old_path
+
+
+def _diff_window(paths: list, extra: list, margin: int = 8) -> tuple[int, int, int]:
+    """(row, col, half) square window around the cells where ``paths`` disagree (plus ``extra`` cells)."""
+    sets = [set(map(tuple, pth)) for pth in paths if len(pth)]
+    diff = (set.union(*sets) - set.intersection(*sets)) if len(sets) > 1 else set()
+    pts = np.asarray(list(diff) + [tuple(c) for c in extra] or [(H // 2, W // 2)])
+    r0, r1, c0, c1 = pts[:, 0].min(), pts[:, 0].max(), pts[:, 1].min(), pts[:, 1].max()
+    half = int(max(r1 - r0, c1 - c0) // 2 + margin)
+    return int((r0 + r1) // 2), int((c0 + c1) // 2), max(half, 10)
+
+
+def tab_replans() -> None:
+    if res is None:
+        st.info("Run a traverse (▶ Run traverse, 💥 Inject hazard on path, or 💥 Drive with my obstacles) to compare "
+                "how the route changed at every replan.")
+        return
+    reps, plans = res.log.by_decision("replan"), res.plans
+    w_disp = trav.world
+    h1, h2 = st.columns([3, 1])
+    h1.markdown("##### 🗂️ Plan history — every adopted route, oldest grey → newest cyan")
+    zoom_diff = h2.toggle("🔍 Zoom to the replan area", value=True, key="hist_zoom")
+    fig = F.shaded_map(w_disp, "", 520)
+    F.add_rings(fig, res.meta["injected"], "hidden obstacle")
+    cols = F.gradient(len(plans))
+    for k, (pl, col) in enumerate(zip(plans, cols)):
+        name = "plan 0 (initial)" if k == 0 else f"plan {k} (after R{k}, step {pl.meta.get('step', '?')})"
+        F.add_path(fig, pl.path, name, col, "solid" if k == len(plans) - 1 else "dash", 3 if k == len(plans) - 1 else 1.8)
+    F.add_path(fig, res.trajectory, "driven", "#ffffff", "solid", 1.2)
+    F.add_labeled_points(fig, [tuple(e.evidence["cell"]) for e in reps], [f"R{i}" for i in range(1, len(reps) + 1)],
+                         "replan trigger cell", F.HAZARD, "x", 10,
+                         [f"R{i} · step {e.step} · {e.reason}" for i, e in enumerate(reps, 1)])
+    F.add_start_goal(fig, w_disp)
+    focus = [tuple(e.evidence["cell"]) for e in reps] + [tuple(e.evidence["rover_rc"]) for e in reps]
+    focus += [tuple(i["rc"]) for i in res.meta["injected"]]
+    show(fig, "plan_history", window=_diff_window([], focus, margin=12) if (zoom_diff and reps) else None)
+    legend([("initial plan", cols[0]), ("latest plan", cols[-1]), ("driven", "#ffffff"), ("trigger cell (R#)", F.HAZARD),
+            ("hidden boulders", F.HAZARD), ("hidden sand", F.CAUTION)])
+    st.caption("Click legend entries to hide/show individual plans.")
+    if not reps:
+        st.success("No replans — the first plan held all the way to the goal.")
+        return
+
+    st.markdown("##### 🔀 Before vs after one replan")
+    k = st.select_slider("Replan", options=list(range(1, len(reps) + 1)), value=1, key=f"replan_pick-{len(reps)}",
+                         format_func=lambda i: f"R{i} · step {reps[i - 1].step}")
+    e = reps[k - 1]
+    ev = e.evidence
+    rover_rc, trig = tuple(ev["rover_rc"]), tuple(ev["cell"])
+    old_rem = _old_remaining(plans[k - 1].path, rover_rc)
+    new_path = plans[k].path
+    detected = [tuple(x.evidence["cell"]) for x in res.log.by_decision("hazard_detected") if x.step <= e.step]
+    driven_so_far = res.trajectory[:e.step + 1]
+    near = [c for c in set(old_rem) ^ set(new_path) if max(abs(c[0] - trig[0]), abs(c[1] - trig[1])) <= 14]
+    win = _diff_window([], near + [trig, rover_rc], margin=5)
+
+    def panel(title: str, key: str, before: bool) -> None:
+        f = F.shaded_map(w_disp, "", 440)
+        F.add_rings(f, res.meta["injected"], "hidden obstacle")
+        F.add_path(f, driven_so_far, "driven so far", "#ffffff", "solid", 2)
+        if before:
+            F.add_path(f, old_rem, f"old route (plan {k - 1})", F.CAUTION, "solid", 3)
+        else:
+            F.add_path(f, old_rem, f"old route (plan {k - 1})", F.CAUTION, "dot", 1.5)
+            F.add_path(f, new_path, f"new route (plan {k})", F.PATH, "solid", 3)
+        F.add_points(f, detected, "boulder detected so far", F.HAZARD, "square", 7)
+        F.add_points(f, [trig], "trigger cell", F.HAZARD, "x", 16)
+        F.add_points(f, [rover_rc], "rover", "#ffffff", "triangle-up", 14)
+        st.markdown(f"**{title}**")
+        show(f, key, window=win)
+
+    old_set, new_set = set(old_rem), set(new_path)
+    c1, c2, c3 = st.columns(3, gap="small")
+    with c1:
+        panel(f"① Before R{k}: route being followed", "replan_before", True)
+    with c2:
+        panel(f"② After R{k}: new route", "replan_after", False)
+    with c3:
+        f = F.shaded_map(w_disp, "", 440)
+        F.add_rings(f, res.meta["injected"], "hidden obstacle")
+        F.add_path(f, [c for c in old_rem if c in new_set], "unchanged", "#9aa0aa", "solid", 1.5)
+        F.add_points(f, sorted(old_set - new_set), "dropped (old only)", F.CAUTION, "square", 8)
+        F.add_points(f, sorted(new_set - old_set), "added (new only)", F.PATH, "square", 8)
+        F.add_points(f, [trig], "trigger cell", F.HAZARD, "x", 16)
+        F.add_points(f, [rover_rc], "rover", "#ffffff", "triangle-up", 14)
+        st.markdown(f"**③ Difference only: {len(old_set - new_set)} dropped · {len(new_set - old_set)} added**")
+        show(f, "replan_diff", window=win)
+    legend([("old route / dropped cells", F.CAUTION), ("new route / added cells", F.PATH), ("driven so far", "#ffffff"),
+            ("trigger / detected boulders", F.HAZARD), ("unchanged", "#9aa0aa")])
+
+    dropped, added = len(old_set - new_set), len(new_set - old_set)
+    st.markdown(f"`s{e.step}` **🔴 REPLAN R{k}** · confidence {e.confidence:.2f} — {e.reason}")
+    rows = [("trigger rule", f"{ev['threshold_name']} (threshold {ev['threshold']:g})", ""),
+            ("P(big_rock) at trigger", f"{ev.get('p_big_rock', float('nan')):.2f}", ""),
+            ("hazard_prob at trigger", f"{ev.get('hazard_prob', float('nan')):.2f}", ""),
+            ("route length ahead (m)", f"{ev['old_length_m']:.0f}", f"{ev['new_length_m']:.0f}"),
+            ("P(success) of route ahead", f"{ev['old_success_prob']:.1%}", f"{ev['new_success_prob']:.1%}"),
+            ("cells dropped / added", f"{dropped} dropped", f"{added} added"),
+            ("backed up along own track", "", f"{ev.get('retreat_cells', 0)} cell(s)")]
+    st.dataframe(pd.DataFrame(rows, columns=["", "before (old route)", "after (new route)"]), hide_index=True,
+                 width="stretch")
+    with st.expander("Evidence (raw numbers exactly as logged)"):
+        st.json(_json_safe(ev), expanded=True)
 
 
 def tab_cost() -> None:
@@ -384,7 +542,7 @@ def tab_cost() -> None:
     st.caption("Cost per metre (Inferno; black = impassable: slope > 25° or P(big_rock) > 0.6). Hover any cell for "
                "the per-component breakdown; the same colour range is used before and after the traverse.")
     st.markdown("##### 🎬 Rover on the cost map")
-    show(get_animation(args, mode, anim_run, float(frac), float(hz_radius), "2d", cm_state, loop, COST_ZMAX),
+    show(get_animation(args, mode, anim_run, float(frac), float(hz_radius), "2d", cm_state, loop, COST_ZMAX, OBST),
          "cost_anim")
     legend([("rover / driven", F.PATH), ("remaining", "rgba(0,229,255,.4)"), ("sensor radius", "rgba(0,229,255,.55)"),
             ("replan", F.HAZARD), ("planned (ghost)", "#cfcfcf"), ("low cost", "#420a68"), ("high cost", "#fcffa4"),
@@ -505,7 +663,7 @@ def tab_log() -> None:
     counts = log.counts()
     all_dec = sorted(counts)
     default = [d for d in all_dec if d != "hazard_detected"] or all_dec
-    lkey = f"{run}-{src}-{mode}-{seed}-{size}-{lam}-{budget}-{radius}-{conn}-{frac}-{hz_radius}"
+    lkey = f"{run}-{src}-{mode}-{seed}-{size}-{lam}-{budget}-{radius}-{conn}-{frac}-{hz_radius}-{hash(OBST)}"
     shown_dec = st.multiselect("Decisions", all_dec, default=default, key=f"log_filter-{lkey}",
                                format_func=lambda d: f"{d} ({counts[d]})")
     entries = [e for e in log if e.decision in shown_dec]
@@ -600,8 +758,8 @@ def safe(fn) -> None:
         st.error(f"This panel hit an error ({type(e).__name__}: {e}). The rest of the dashboard still works.")
 
 
-tabs = st.tabs(["🚀 Mission", "⛰️ Cost & Hazards", "❔ Uncertainty", "🧭 Routes", "🔬 Science", "📜 Decision Log",
+tabs = st.tabs(["🚀 Mission", "🔀 Replans", "⛰️ Cost & Hazards", "❔ Uncertainty", "🧭 Routes", "🔬 Science", "📜 Decision Log",
                 "👁️ Perception"])
-for tab, fn in zip(tabs, (tab_mission, tab_cost, tab_uncertainty, tab_routes, tab_science, tab_log, tab_perception)):
+for tab, fn in zip(tabs, (tab_mission, tab_replans, tab_cost, tab_uncertainty, tab_routes, tab_science, tab_log, tab_perception)):
     with tab:
         safe(fn)

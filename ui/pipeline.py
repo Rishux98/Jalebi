@@ -110,20 +110,45 @@ def build_routes(site: Site, science: Science) -> ParetoResult:
                       science.selection.waypoints or None, site.truth_costmap)
 
 
+KIND_LABEL = {"big_rock": "boulder field", "sand": "sand trap"}
+
+
 def run_traverse(size: int, seed: int, cfg: Config, mode: str, inject: bool, frac: float, radius: float,
-                 site: Site, science: Science, source: str = "synthetic") -> Traverse:
-    """Drive the rover from start to goal in a fresh copy of the site's world."""
+                 site: Site, science: Science, source: str = "synthetic",
+                 obstacles: tuple[tuple[int, int, float, str], ...] = ()) -> Traverse:
+    """Drive the rover from start to goal in a fresh copy of the site's world.
+
+    ``inject`` plants one boulder field on the initial path (auto). ``obstacles`` are user-placed hidden hazards
+    ``(row, col, radius_cells, kind)`` with kind "big_rock" | "sand"; ones that would cover the start or goal
+    (or fall off the map) are skipped and reported in ``note``. The rover is told about none of them.
+    """
     w = new_world(size, seed, cfg, source)
     targets = [Target(**{**t.__dict__}) for t in science.selection.selected] if mode == "science" else []
     rover = Rover(w, cfg, mode, seed=seed, confusion=site.confusion, targets=targets, layers=site.layers,
                   belief=site.prior)
-    note = ""
+    notes = []
     if inject:
         try:
             rc = rover.inject_hazard_on_path(frac, radius, "big_rock")
-            note = f"hidden boulder field r={radius:g} planted at {rc} on the initial path (rover not told)"
+            notes.append(f"hidden boulder field r={radius:g} planted at {rc} on the initial path (rover not told)")
         except ValueError as e:
-            note = f"no hazard injected: {e}"
+            notes.append(f"no hazard injected: {e}")
+    placed, skipped = [], []
+    for r, c, rad, kind in obstacles:
+        r, c, rad = int(r), int(c), float(rad)
+        cheb = lambda a: max(abs(a[0] - r), abs(a[1] - c))  # noqa: E731
+        if not w.in_bounds((r, c)) or kind not in KIND_LABEL:
+            skipped.append(f"({r}, {c}) invalid")
+        elif cheb(w.start) <= rad or cheb(w.goal) <= rad:
+            skipped.append(f"({r}, {c}) covers start/goal")
+        else:
+            rover.inject_hazard((r, c), rad, kind)
+            placed.append(f"{KIND_LABEL[kind]} r={rad:g} at ({r}, {c})")
+    if placed:
+        notes.append(f"{len(placed)} user obstacle(s), rover not told: " + "; ".join(placed))
+    if skipped:
+        notes.append("skipped: " + "; ".join(skipped))
+    note = " · ".join(notes)
     res = rover.run_to_goal()
     return Traverse(res, w, [Target(**{**t.__dict__}) for t in science.selection.selected] if mode == "science" else [],
                     mode, note)

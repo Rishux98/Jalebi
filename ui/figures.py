@@ -169,15 +169,42 @@ def add_start_goal(fig: go.Figure, world: World) -> go.Figure:
     return add_points(fig, [world.goal], "goal", "#e87ba4", "star", 17)
 
 
-def add_rings(fig: go.Figure, injected: Sequence[dict], name: str = "injected hazard") -> go.Figure:
+def add_rings(fig: go.Figure, injected: Sequence[dict], name: str = "injected hazard", color: str | None = None,
+              dash: str = "dot") -> go.Figure:
+    """Hidden-hazard discs as rings. Each dict: rc [r, c], radius (cells), optional kind ("big_rock" | "sand")."""
     for i, inj in enumerate(injected):
         r0, c0 = inj["rc"]
         rad = float(inj["radius"]) + 0.5
+        kind = inj.get("kind", "big_rock")
+        col = color or (HAZARD if kind == "big_rock" else CAUTION)
         t = np.linspace(0, 2 * np.pi, 60)
+        label = "boulder field" if kind == "big_rock" else "sand trap"
         fig.add_trace(go.Scatter(x=(c0 + rad * np.cos(t)).tolist(), y=(r0 + rad * np.sin(t)).tolist(), mode="lines",
-                                 line=dict(color=HAZARD, width=2.5, dash="dot"), name=name, showlegend=i == 0,
-                                 hovertemplate=f"{name} r={inj['radius']:g} at ({r0}, {c0})<extra></extra>"))
+                                 line=dict(color=col, width=2.5, dash=dash), name=name, showlegend=i == 0,
+                                 legendgroup=name,
+                                 hovertemplate=f"{name}: {label} r={inj['radius']:g} at ({r0}, {c0})<extra></extra>"))
     return fig
+
+
+def add_labeled_points(fig: go.Figure, cells: Sequence[RC], labels: Sequence[str], name: str, color: str,
+                       symbol: str = "diamond", size: int = 11, hover: Sequence[str] | None = None) -> go.Figure:
+    """Markers with short text labels (e.g. R1, R2) offset up-right, so stacked events stay readable."""
+    if len(cells) == 0:
+        return fig
+    x, y = _xy(cells)
+    fig.add_trace(go.Scatter(x=x, y=y, mode="markers+text", name=name, text=list(labels), textposition="top right",
+                             textfont=dict(color=color, size=12, family="sans-serif"),
+                             customdata=list(hover) if hover is not None else list(labels),
+                             marker=dict(color=color, symbol=symbol, size=size, line=dict(color=SURFACE, width=1.5)),
+                             hovertemplate=f"{name}<br>%{{customdata}}<extra></extra>"))
+    return fig
+
+
+def gradient(n: int, start: str = "#8a8a93", end: str = PATH) -> list[str]:
+    """n colours from ``start`` (oldest) to ``end`` (newest) — plan history ordering."""
+    a = np.array([int(start[i:i + 2], 16) for i in (1, 3, 5)], float)
+    b = np.array([int(end[i:i + 2], 16) for i in (1, 3, 5)], float)
+    return ["#" + "".join(f"{int(round(v)):02x}" for v in a + (b - a) * (k / max(n - 1, 1))) for k in range(n)]
 
 
 def cost_map(cm: CostMap, title: str = "Cost (black = impassable)", height: int = 520,

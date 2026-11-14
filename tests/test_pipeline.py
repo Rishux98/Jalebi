@@ -28,3 +28,19 @@ def test_full_pipeline_under_20s(source):
     # cells entered over 16 runs (4 seeds x 2 sites x 2 modes); allow a small number, never a pile-up
     assert res.reached_goal and res.replans >= 1 and res.meta["entered_true_hazard_cells"] <= 2
     assert res.energy_wh <= site.cfg.sci_energy_budget_wh + 1e-6 or not sci.selection.selected
+
+
+def test_user_obstacles_on_route_trigger_replans_and_bad_ones_are_skipped():
+    cfg = make_cfg(1.0, 800.0, 6)
+    site = build_site(100, 42, cfg, budget_factor=1.45)
+    sci = build_science(site)
+    path = build_routes(site, sci).modes["balanced"].path
+    mid = path[len(path) // 2]
+    s0 = site.world.start
+    obstacles = ((mid[0], mid[1], 3, "big_rock"), (s0[0], s0[1], 2, "big_rock"), (500, 500, 2, "sand"))
+    tr = run_traverse(100, 42, site.cfg, "balanced", False, 0.4, 3, site, sci, obstacles=obstacles)
+    res = tr.result
+    assert [i["rc"] for i in res.meta["injected"]] == [[mid[0], mid[1]]]           # only the valid one planted
+    assert "1 user obstacle(s)" in tr.note and "covers start/goal" in tr.note and "invalid" in tr.note
+    assert res.reached_goal and res.replans >= 1 and len(res.plans) == res.replans + 1
+    assert res.meta["entered_true_hazard_cells"] <= 2
