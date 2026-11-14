@@ -223,7 +223,8 @@ with st.sidebar:
         st.session_state.run = "manual"
     onboard_on = st.toggle("🧠 Onboard memory mode (colibri-style tiering)", key="onboard",
                            help="Run the same traverse with int16/uint8 terrain in 64x64 tiles (HOT/WARM/COLD tiers, "
-                                "path-lookahead prefetch) and hierarchical A*. See the 🧠 Onboard tab.")
+                                "path-lookahead prefetch) and hierarchical A*. Needs a traverse: a summary "
+                                "appears under the metric cards, details in the 🧠 Onboard tab.")
     loop = st.toggle("🔁 Loop animation", key="loop", help="Off: plays once. On: frames repeat and the player "
                                                           "restarts automatically when it reaches the end.")
     st.caption(f"Energy budget = {budget:.2f} × {_s.direct_energy_wh:.0f} Wh (direct route) = "
@@ -390,6 +391,32 @@ if res is not None:
     st.markdown(chip("goal", "reached ✅" if res.reached_goal else "not reached ⛔", "ok" if res.reached_goal else "bad")
                 + chip("driven", f"{res.steps} steps") + chip("boulder cells entered (ground-truth check)", str(rk),
                                                             "ok" if rk == 0 else "bad"), unsafe_allow_html=True)
+
+
+def onboard_strip() -> None:
+    """Main-screen summary of onboard memory mode (details in the 🧠 Onboard tab)."""
+    if res is None:
+        st.info("🧠 Onboard memory mode is on — press **Run traverse** (or 💥 Inject hazard) to drive the same site "
+                "with tiered int16/uint8 memory and compare it against the full float32 rover here.")
+        return
+    inj = tuple((i["rc"][0], i["rc"][1], i["radius"], i.get("kind", "big_rock")) for i in res.meta["injected"])
+    ob = get_onboard(*args, mode, inj)
+    ores, s_ = ob.result, ob.store_stats
+    st.markdown("##### 🧠 Onboard memory mode — same traverse, tiered compact memory (details: 🧠 Onboard tab)")
+    oc = st.columns(4, gap="small")
+    d_len = (ores.distance_m - res.distance_m) / max(res.distance_m, 1e-9)
+    ork = ores.meta["entered_true_hazard_cells"]
+    for col, (lab, val, dlt, hlp) in zip(oc, [
+            ("State RAM", _mb(ob.resident_onboard_bytes), f"{ob.resident_full_bytes / ob.resident_onboard_bytes:.1f}× less",
+             f"Rover state RAM: onboard vs FULL float32 ({_mb(ob.resident_full_bytes)})"),
+            ("HOT hits", f"{s_['hit_rate']:.1%}", f"{s_['stalls']} stalls",
+             f"Tile reads served from decoded RAM ({s_['requests']} reads); stalls = synchronous flash loads"),
+            ("Path Δ", f"{ores.distance_m:.0f} m", f"{d_len:+.1%}",
+             f"Onboard driven distance; delta vs the FULL rover ({res.distance_m:.0f} m)"),
+            ("Boulders", str(ork), "goal ✅" if ores.reached_goal else "no goal ⛔",
+             "Ground-truth boulder cells entered by the onboard rover; and whether it reached the goal")]):
+        with col.container(border=True):
+            st.metric(lab, val, dlt, delta_color="off", help=hlp)
 
 hmax = float(np.log(N_CLASSES))
 fin_cost = site.costmap.cost[np.isfinite(site.costmap.cost)]
@@ -884,6 +911,10 @@ def safe(fn) -> None:
         fn()
     except Exception as e:  # noqa: BLE001
         st.error(f"This panel hit an error ({type(e).__name__}: {e}). The rest of the dashboard still works.")
+
+
+if onboard_on:
+    safe(onboard_strip)
 
 
 tabs = st.tabs(["🚀 Mission", "🔀 Replans", "⛰️ Cost & Hazards", "❔ Uncertainty", "🧭 Routes", "🔬 Science", "📜 Decision Log",
