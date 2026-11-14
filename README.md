@@ -2,6 +2,12 @@
 
 **HackInnovision 2026 · Track A · rover MARS-09**
 
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://jalebi-i8vhn3zaxkasaffkdckz7n.streamlit.app/)
+
+**▶ Live demo: https://jalebi-i8vhn3zaxkasaffkdckz7n.streamlit.app/** — press **Run traverse**, then
+**Inject hazard on path** to watch the rover find a hidden boulder field and replan. (If the app was asleep,
+click "Yes, get this app back up" and give it ~30 s.)
+
 A Mars rover is ~20 minutes of light-time from mission control, so it cannot ask before every step.
 ODYSSEY plans a traverse from orbital data, drives it, **discovers hazards the orbiter could not see**,
 replans on its own, and logs **every decision with the raw numbers behind it** — so a human can audit it later.
