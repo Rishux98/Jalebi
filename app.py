@@ -50,6 +50,14 @@ st.markdown(f"""
   .legend i {{display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 4px 0 10px; vertical-align:middle;}}
   .empty {{border:1px dashed #3a3d46; border-radius:12px; padding:2.2rem; text-align:center; background:#151821;}}
   .empty h3 {{margin:.2rem 0 .4rem 0;}}
+  [data-testid="stMetricLabel"] p, [data-testid="stMetricDelta"] div {{white-space:normal; overflow:visible;
+          text-overflow:clip;}}
+  /* metric cards: one row of 6 on wide screens, 2 rows of 3 otherwise */
+  .st-key-kpis [data-testid="stHorizontalBlock"] {{flex-wrap:wrap;}}
+  @media (max-width: 1399px) {{
+    .st-key-kpis [data-testid="stColumn"] {{flex:1 1 calc(33.333% - 1rem) !important;
+          min-width:calc(33.333% - 1rem) !important;}}
+  }}
 </style>""", unsafe_allow_html=True)
 
 
@@ -346,7 +354,7 @@ succ = (res.plans[0].success_prob if (res is not None and res.plans) else plan.s
 expanded = sum(p.expanded_nodes for p in res.plans) if res is not None else plan.expanded_nodes
 n_targets = len(trav.targets) if trav is not None else (len(sci.selection.selected) if mode == "science" else 0)
 visited = len(res.log.by_decision("continue")) if res is not None else 0
-cards = st.columns(6, gap="small")
+cards = st.container(key="kpis").columns(6, gap="small")
 
 
 def card(col, label: str, value: str, delta: str | None = None, delta_color: str = "normal", help_: str | None = None,
@@ -358,18 +366,25 @@ def card(col, label: str, value: str, delta: str | None = None, delta_color: str
 
 
 card(cards[0], "Path length", f"{length:.0f} m",
-     f"{length - shortest.length_m:+.0f} m vs shortest" if shortest and shortest.found else None, "inverse")
-card(cards[1], "Energy", f"{energy:.0f} Wh", f"{energy / budget_wh:.0%} of {budget_wh:.0f} Wh budget", "off")
+     f"{length - shortest.length_m:+.0f} m" if shortest and shortest.found else None, "inverse",
+     help_="Driven (or planned) distance; delta is vs the shortest route")
+card(cards[1], "Energy", f"{energy:.0f} Wh", f"{energy / budget_wh:.0%} budget", "off",
+     help_=f"Energy used; delta is the share of the {budget_wh:.0f} Wh energy budget")
 s_kind, s_txt = (("ok", "≥ 95 %: go") if succ >= 0.95 else ("warn", "80–95 %: caution") if succ >= 0.80
                  else ("bad", "< 80 %: risky"))
-card(cards[2], "Success probability", f"{succ:.1%}",
-     f"{(succ - shortest.success_prob) * 100:+.1f} pts vs shortest" if shortest and shortest.found else None,
-     help_="Π(1 − hazard_prob) along the planned route, under the rover's belief", badge=(s_txt, s_kind))
+card(cards[2], "Success", f"{succ:.1%}",
+     f"{(succ - shortest.success_prob) * 100:+.1f} pts" if shortest and shortest.found else None,
+     help_="Success probability = Π(1 − hazard_prob) along the planned route, under the rover's belief; "
+           "delta is in percentage points vs the shortest route", badge=(s_txt, s_kind))
 card(cards[3], "Replans", str(res.replans) if res is not None else "—",
-     f"{res.meta['extra_looks']} extra looks" if res is not None else None, "off")
-card(cards[4], "Targets visited", f"{visited} / {n_targets}" if n_targets else "—",
-     "science mode" if mode == "science" else "science mode only", "off")
-card(cards[5], "Expanded nodes", f"{expanded:,}", f"{len(res.plans)} plan(s)" if res is not None else "A* search", "off")
+     f"{res.meta['extra_looks']} looks" if res is not None else None, "off",
+     help_="Number of replans; delta is the extra navcam looks taken before stepping")
+card(cards[4], "Targets", f"{visited} / {n_targets}" if n_targets else "—",
+     "sci mode" if mode == "science" else "sci only", "off",
+     help_="Science targets visited / selected (counted in science mode only)")
+card(cards[5], "Nodes", f"{expanded:,}",
+     (f"{len(res.plans)} plan" + ("s" if len(res.plans) != 1 else "")) if res is not None else "A* search", "off",
+     help_="A* expanded nodes summed over all plans; delta is the number of plans computed")
 if res is not None:
     rk = res.meta["entered_true_hazard_cells"]
     st.markdown(chip("goal", "reached ✅" if res.reached_goal else "not reached ⛔", "ok" if res.reached_goal else "bad")
