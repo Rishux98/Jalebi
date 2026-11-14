@@ -154,6 +154,63 @@ def run_traverse(size: int, seed: int, cfg: Config, mode: str, inject: bool, fra
                     mode, note)
 
 
+@dataclass
+class OnboardRun:
+    """Onboard-memory-mode traverse of the same site + hidden hazards as a FULL traverse."""
+    result: RunResult
+    world: World
+    tier_frames: list
+    tile: int
+    store_stats: dict
+    compact_cost_bytes: int
+    error: dict
+    layers: list
+    resident_full_bytes: int
+    resident_onboard_bytes: int
+
+
+FULL_BYTES_PER_CELL = {  # FULL-mode rover state, bytes per cell (float32 unless noted)
+    "terrain layers (slope, roughness, curvature, P(slope>25°))": 16, "elevation": 4,
+    "cost + hazard + energy + 5 cost components": 32, "belief (4 class probs)": 16, "belief entropy": 4,
+    "observed mask (bool) + visited (bool)": 2, "navcam look counts (int32)": 4}
+
+
+def run_onboard(size: int, seed: int, cfg: Config, mode: str, site: Site, science: Science,
+                injected: tuple = (), source: str = "synthetic") -> OnboardRun:
+    """Drive the OnboardRover (tiered tiles + compact cost state + hierarchical A*) with the same hidden hazards
+    ``(row, col, radius, kind)`` the FULL traverse had. Ground station builds + uplinks the tile store first."""
+    from onboard.quantize import QuantizedDEM, pack_classes, report_error
+    from onboard.rover import OnboardRover
+    from onboard.tiered_store import build_store
+
+    w = new_world(size, seed, cfg, source)
+    store = build_store(w, site.layers, cfg, prefetch_sync=True, simulate_latency=False, usage_path=None)
+    targets = [Target(**{**t.__dict__}) for t in science.selection.selected] if mode == "science" else []
+    rover = OnboardRover(w, store, cfg, mode, seed=seed, confusion=site.confusion, targets=targets, belief=site.prior)
+    for r, c, rad, kind in injected:
+        rover.inject_hazard((int(r), int(c)), float(rad), kind)
+    res = rover.run_to_goal()
+    st = store.stats()
+    H, W = w.shape
+    cells = H * W
+    qd = QuantizedDEM.from_float(w.dem)
+    layers = [("elevation", 4 * cells, qd.nbytes, "int16 · 0.01 m · in tiles"),
+              ("slope", 4 * cells, cells, "uint8 · 0.5° · in tiles"),
+              ("roughness", 4 * cells, cells, "uint8 · in tiles"),
+              ("curvature", 4 * cells, 0, "computed per window"),
+              ("P(slope > 25°)", 4 * cells, 0, "computed per window"),
+              ("cost + 5 components", 24 * cells, cells, "uint8 · 255 = impassable"),
+              ("hazard_prob", 4 * cells, cells, "uint8 · log scale 1e-6…1"),
+              ("energy Wh/m", 4 * cells, cells, "uint8"),
+              ("terrain class (packed)", cells, int(pack_classes(w.true_class).nbytes), "2 bits / cell")]
+    resident_on = (st["hot_bytes"] + st["warm_bytes"] + st["resident_coarse_bytes"] + rover.ccm.nbytes
+                   + cells * (16 + 4 + 2 + 4))
+    store.close()
+    return OnboardRun(res, w, rover.tier_frames, store.tile, st, rover.ccm.nbytes,
+                      report_error(w.dem, w.cell_size, cfg=cfg), layers, cells * sum(FULL_BYTES_PER_CELL.values()),
+                      int(resident_on))
+
+
 if __name__ == "__main__":
     import time
 

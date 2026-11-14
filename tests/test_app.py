@@ -99,6 +99,10 @@ def test_app_click_through():
     assert not at.exception and not at.error
     at.sidebar.toggle(key="loop").set_value(True).run()                # loop: repeated frames + JS hook
     assert not at.exception and not at.error
+    at.sidebar.toggle(key="onboard").set_value(True).run()             # onboard memory mode tab
+    assert not at.exception and not at.error, [e.value for e in at.error]
+    assert any("Quantisation error" in str(m.value) for m in at.markdown)
+    at.sidebar.toggle(key="onboard").set_value(False).run()
     at.sidebar.radio(key="movement").set_value("8-way (diagonals)").run()
     # manual obstacles: place one on the route centre, drive, then the Replans tab compares before/after
     at.sidebar.radio(key="placement").set_value("Manual (choose cells)").run()

@@ -179,6 +179,40 @@ Selection is greedy by utility per Wh, re-planning from each chosen target, and 
   every exit was a boulder (the diagonal it came in by is blocked by the no-corner-cutting rule). Treating
   driven-over cells as traversable and backing up along the track took the goal rate from 14/16 to 16/16.
 
+## 7b. Onboard memory mode (tiered terrain tiles)
+
+*Tiering idea adapted from [colibri](https://github.com/JustVugg/colibri) (MoE expert offloading: hot experts on GPU,
+warm in RAM, cold streamed from disk, learned cache, lookahead prefetch) → terrain tiles. Architecture only — no
+colibri code is used.* Code: `onboard/`; the regular rover (`autonomy/loop.py`) is untouched — `OnboardRover`
+subclasses it and inherits every decision rule.
+
+| piece | what it does |
+|---|---|
+| `onboard/quantize.py` | int16 DEM (0.01 m, auto-widened if the relief does not fit), uint8 slope (0.5°), roughness, cost (255 = impassable), **log-scale uint8 hazard** (1e-6…1, ±2.8 % relative), 2-bit classes; `report_error` |
+| `onboard/tiered_store.py` | 64×64 tiles, one zlib blob each (row-delta). COLD flash (2 ms simulated read) → WARM compressed RAM → HOT decoded RAM (9 tiles). Resident 4× coarse map (mean elevation, **max** slope). Heat = decayed access + on-path + proximity; the rover tile is pinned. Path-lookahead prefetch on a 1-worker thread (sync option for tests); usage history in `onboard/.tile_usage.json` warms the next run |
+| `onboard/planner.py` | uint8 `CompactCostMap` (3 B/cell instead of 32), lazy `CostView`s, `hierarchical_plan`: coarse corridor A* + rolling 64×64 local A*; curvature, P(slope>25°) and the entropy term are computed per window, never stored globally |
+| `onboard/rover.py` | `OnboardRover`: terrain from tiles, compact cost state, hierarchical planning, `store.update_rover(rc, remaining_path)` every step (replans re-prioritise prefetch) |
+| `onboard/bench.py` | same traverse + hidden hazard in FULL vs ONBOARD → `onboard/bench.json` |
+
+**Precision is reported, not hidden.** Elevation error ≤ 0.5 cm (≈ 60× below the 0.3 m DEM noise); stored slope
+error ≤ 0.25° (0.55° if re-derived from the int16 DEM, which is why slope is stored separately). A first version
+stored hazard as linear uint8 — a typical per-cell hazard of 0.001 rounded to **0** and route P(success) jumped from
+0.70 to 0.96. Hazard is therefore log-scaled; the onboard route now scores 0.687 vs 0.705 for full A*.
+
+**What it saves (and what it does not).** Per layer: elevation 2×, slope/roughness 4×, cost state 10.7×, curvature and
+P(slope>25°) are not stored at all. The rover's belief (4 float32 per cell) stays full-size in both modes because
+every step updates it — so whole-rover state shrinks ≈ 2.5×, and the benefit grows with map size (a 1 m HiRISE strip is
+≈ 10k × 20k cells ≈ 800 MB per float32 layer). Measured by `python -m onboard.bench` (tracemalloc peak during rover
+boot + traverse; dashboard replay telemetry excluded in both modes; tile flash = storage):
+
+| site | peak RAM full → onboard | rover state | HOT hit / stalls / prefetch hit | replans F/O | driven Δ | P(success) Δ | wall F/O |
+|---|---|---|---|---|---|---|---|
+| 200 (200×200) | 8.6 MB → 6.0 MB (**1.43×**) | 3.1 MB → 1.3 MB (2.48×) | 100.0% / 0 / 100% | 4/3 | -0.0 % | -1.8 pts | 11 s / 4 s |
+| hirise (300×300) | 18.5 MB → 7.5 MB (**2.48×**) | 7.0 MB → 2.8 MB (2.48×) | 99.9% / 1 / 100% | 4/3 | -0.1 % | -0.1 pts | 23 s / 6 s |
+| 1024 (1024×1024) | 224.1 MB → 47.7 MB (**4.7×**) | 81.8 MB → 31.2 MB (2.62×) | 99.7% / 10 / 84% | 6/4 | +0.3 % | +0.1 pts | 399 s / 38 s |
+
+All runs reached the goal with 0 boulder cells entered in both modes. Wall times include tracemalloc overhead.
+
 ## 8. Assumptions and limitations
 
 * **Synthetic ground truth.** Terrain classes and ice are procedural on the synthetic site. On the HiRISE

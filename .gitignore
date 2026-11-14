@@ -7,3 +7,6 @@ outputs/
 *.npy
 !perception/confusion.npy
 .streamlit/secrets.toml
+
+# onboard memory mode: learned tile-usage history (per machine)
+onboard/.tile_usage.json

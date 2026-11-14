@@ -355,3 +355,32 @@ if __name__ == "__main__":
     out.write_text("".join(f.to_html(full_html=False, include_plotlyjs="cdn" if i == 0 else False)
                            for i, f in enumerate(figs.values())))
     print(f"{len(figs)} figures OK -> {out}")
+
+
+TIER_COLORS = {0: "rgba(140,140,150,0.10)", 1: "rgba(244,162,97,0.40)", 2: "rgba(255,107,53,0.62)"}
+
+
+def tier_map(world: World, tiers: np.ndarray, tile: int, rover: RC | None = None, path: Sequence[RC] = (),
+             driven: Sequence[RC] = (), height: int = 520) -> go.Figure:
+    """Terrain with the tile grid coloured by tier: HOT orange, WARM amber, COLD grey; teal outline = the
+    always-resident coarse map; rover + planned path + driven track on top."""
+    fig = shaded_map(world, "", height)
+    h, w = world.shape
+    z = np.kron(np.asarray(tiers, np.float64), np.ones((tile, tile)))[:h, :w]
+    scale = [[0.0, TIER_COLORS[0]], [0.33, TIER_COLORS[0]], [0.34, TIER_COLORS[1]], [0.66, TIER_COLORS[1]],
+             [0.67, TIER_COLORS[2]], [1.0, TIER_COLORS[2]]]
+    names = np.array(["COLD (flash)", "WARM (compressed RAM)", "HOT (decoded RAM)"], dtype=object)
+    fig.add_trace(go.Heatmap(z=z, zmin=0, zmax=2, colorscale=scale, showscale=False, name="tier",
+                             customdata=names[z.astype(int)],
+                             hovertemplate="r=%{y} c=%{x}<br>tile tier: %{customdata}<extra></extra>"))
+    for k in range(0, max(h, w) + 1, tile):              # tile grid
+        if k <= w:
+            fig.add_shape(type="line", x0=k - 0.5, x1=k - 0.5, y0=-0.5, y1=h - 0.5, line=dict(color=GRID, width=1))
+        if k <= h:
+            fig.add_shape(type="line", y0=k - 0.5, y1=k - 0.5, x0=-0.5, x1=w - 0.5, line=dict(color=GRID, width=1))
+    fig.add_shape(type="rect", x0=-0.5, y0=-0.5, x1=w - 0.5, y1=h - 0.5, line=dict(color=SAFE, width=2.5, dash="dash"))
+    add_path(fig, driven, "driven", "#ffffff", "solid", 1.8)
+    add_path(fig, path, "planned path", PATH, "dash", 2.2)
+    if rover is not None:
+        add_points(fig, [rover], "rover", PATH, "circle", 12)
+    return fig

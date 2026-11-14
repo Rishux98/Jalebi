@@ -20,7 +20,7 @@ from core.types import CLASS_NAMES, N_CLASSES
 from perception.sensor_model import get_sensor_info
 from ui import figures as F
 from ui.animation import LOOP_JS, make_path_animation
-from ui.pipeline import MODES, build_routes, build_science, build_site, make_cfg, run_traverse
+from ui.pipeline import MODES, build_routes, build_science, build_site, make_cfg, run_onboard, run_traverse
 from world.real_dem import default_tile_available
 
 ROOT = Path(__file__).resolve().parent
@@ -107,6 +107,14 @@ def get_animation(args: tuple, mode: str, run: str, frac: float, hz_radius: floa
     else:
         base = F.cost_map(cm, "", 600, zmax=cost_zmax)
     return make_path_animation(base, path, world.dem, world.cell_size, view, meta, entries, loop=loop)
+
+
+@st.cache_resource(show_spinner="Onboard mode: building tiles, driving with tiered memory…", max_entries=8)
+def get_onboard(src: str, size: int, seed: int, lam: float, budget: float, radius: int, conn: int, mode: str,
+                injected: tuple):
+    site = get_site(src, size, seed, lam, budget, radius, conn)
+    return run_onboard(size, seed, site.cfg, mode, site, get_science(src, size, seed, lam, budget, radius, conn),
+                       injected, source=src)
 
 
 def _json_safe(d: dict) -> dict:
@@ -205,6 +213,9 @@ with st.sidebar:
                    width="stretch", disabled=not st.session_state.obstacles,
                    help="Plant your obstacles as hidden ground truth, then drive. The rover is not told."):
         st.session_state.run = "manual"
+    onboard_on = st.toggle("🧠 Onboard memory mode (colibri-style tiering)", key="onboard",
+                           help="Run the same traverse with int16/uint8 terrain in 64x64 tiles (HOT/WARM/COLD tiers, "
+                                "path-lookahead prefetch) and hierarchical A*. See the 🧠 Onboard tab.")
     loop = st.toggle("🔁 Loop animation", key="loop", help="Off: plays once. On: frames repeat and the player "
                                                           "restarts automatically when it reaches the end.")
     st.caption(f"Energy budget = {budget:.2f} × {_s.direct_energy_wh:.0f} Wh (direct route) = "
@@ -313,6 +324,7 @@ st.markdown(chip("world", f"{world.name} · {H}×{W} @ {world.cell_size:.2f} m")
             + chip("sensor", "trained" if sensor["source"] == "trained" else "fallback",
                    "ok" if sensor["source"] == "trained" else "warn")
             + chip("mission", state, state_kind)
+            + (chip("memory", "onboard tiers", "info") if onboard_on else "")
             + (chip("hazard", trav.note, "warn") if run in ("inject", "manual") and trav is not None else ""),
             unsafe_allow_html=True)
 
@@ -750,6 +762,107 @@ def tab_perception() -> None:
             cols[i % 3].image(str(pth), width="stretch", caption=pth.stem)
 
 
+def _mb(b: float) -> str:
+    return f"{b / 1e6:.2f} MB" if b >= 1e5 else f"{b / 1e3:.1f} KB"
+
+
+def tab_onboard() -> None:
+    st.caption("Tiering idea adapted from colibri (MoE expert offloading) → terrain tiles.")
+    if not onboard_on:
+        st.info("Turn on **🧠 Onboard memory mode** in the sidebar to run the same traverse with compact int16/uint8 "
+                "terrain in tiered 64×64 tiles (HOT / WARM / COLD) and hierarchical planning.")
+        return
+    if res is None:
+        st.info("Run a traverse (▶ Run traverse, 💥 Inject hazard, or 💥 Drive with my obstacles): onboard mode then "
+                "drives the same site with the same hidden hazards and is compared against it here.")
+        return
+    injected = tuple((i["rc"][0], i["rc"][1], i["radius"], i.get("kind", "big_rock")) for i in res.meta["injected"])
+    ob = get_onboard(*args, mode, injected)
+    ores, s_ = ob.result, ob.store_stats
+    err = ob.error
+    # ---- precision is never changed silently: error report always first
+    with st.container(border=True):
+        st.markdown(f"**📏 Quantisation error** — max elevation error **{err['max_elev_err_m'] * 100:.1f} cm** "
+                    f"(int16 at {err['scale_m'] * 100:.0f} cm{', auto-widened' if err['auto_widened'] else ''}) ≈ "
+                    f"**{err['noise_to_error_ratio']:.0f}× below** the {err['dem_noise_sigma_m']:.1f} m DEM noise · "
+                    f"max slope error **{err['max_slope_err_deg_uint8_storage']:.2f}°** as stored "
+                    f"({err['max_slope_err_deg_from_int16_dem']:.2f}° if re-derived from the int16 DEM) · hazard "
+                    "probabilities on a log scale (±2.8 % relative), so tiny per-cell risks are not rounded to zero.")
+    c = st.columns(4, gap="small")
+    for col, (lab, val, sub) in zip(c, [("HOT hit rate", f"{s_['hit_rate']:.1%}", f"{s_['requests']} tile reads"),
+                                        ("Stalls", str(s_["stalls"]), "synchronous loads"),
+                                        ("Prefetch hits", f"{s_['prefetch_hits']} / {s_['prefetch_loaded']}",
+                                         f"{s_['prefetch_hit_rate']:.0%} used"),
+                                        ("Evictions", f"{s_['evictions_hot']} HOT · {s_['evictions_warm']} WARM",
+                                         f"{s_['tiles']} tiles of {ob.tile}×{ob.tile}")]):
+        with col.container(border=True):
+            st.metric(lab, val, sub, delta_color="off")
+
+    left, right = st.columns([1.1, 1], gap="medium")
+    with left:
+        st.markdown("##### 🧱 Tile tiers along the traverse")
+        k = st.slider("Step", 0, len(ob.tier_frames) - 1, min(len(ob.tier_frames) - 1, ores.steps // 3),
+                      key=f"tier_step-{len(ob.tier_frames)}")
+        plan_k = [p for p in ores.plans if p.meta.get("step", 0) <= k][-1] if ores.plans else None
+        rov = ores.trajectory[min(k, len(ores.trajectory) - 1)]
+        ahead = plan_k.path[plan_k.path.index(rov):] if (plan_k and rov in plan_k.path) else (plan_k.path if plan_k else [])
+        show(F.tier_map(ob.world, ob.tier_frames[k], ob.tile, rov, ahead, ores.trajectory[:k + 1], 520), "tier_map")
+        legend([("HOT (decoded RAM)", "#FF6B35"), ("WARM (compressed RAM)", "#F4A261"), ("COLD (flash)", "#8c8c96"),
+                ("resident coarse map", F.SAFE), ("rover / planned path", F.PATH)])
+    with right:
+        st.markdown("##### 🛣️ FULL vs ONBOARD paths")
+        fig = F.shaded_map(ob.world, "", 520)
+        F.add_rings(fig, ores.meta["injected"], "hidden obstacle")
+        F.add_path(fig, res.trajectory, f"FULL ({res.distance_m:.0f} m)", "#ffffff", "solid", 2.5)
+        F.add_path(fig, ores.trajectory, f"ONBOARD ({ores.distance_m:.0f} m)", F.PATH, "dash", 2.5)
+        F.add_start_goal(fig, ob.world)
+        show(fig, "onboard_paths")
+        cmp_rows = [("reached goal", res.reached_goal, ores.reached_goal),
+                    ("driven (m)", round(res.distance_m, 1), round(ores.distance_m, 1)),
+                    ("replans", res.replans, ores.replans),
+                    ("initial-plan P(success)", f"{res.plans[0].success_prob:.1%}", f"{ores.plans[0].success_prob:.1%}"),
+                    ("boulder cells entered", res.meta["entered_true_hazard_cells"],
+                     ores.meta["entered_true_hazard_cells"]),
+                    ("A* nodes expanded", sum(p.expanded_nodes for p in res.plans),
+                     sum(p.expanded_nodes for p in ores.plans))]
+        st.dataframe(pd.DataFrame(cmp_rows, columns=["", "FULL", "ONBOARD"]).astype(str), hide_index=True,
+                     width="stretch")
+
+    st.markdown("##### 🧮 Memory: full float32 vs onboard compact")
+    rows = [{"layer": n, "full": _mb(f), "onboard": _mb(o), "reduction": f"{f / o:.0f}×" if o else "not stored",
+             "format": how} for n, f, o, how in ob.layers]
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    t1, t2, t3 = st.columns(3, gap="small")
+    with t1.container(border=True):
+        st.metric("Rover state RAM", _mb(ob.resident_onboard_bytes),
+                  f"{ob.resident_full_bytes / ob.resident_onboard_bytes:.1f}× less than FULL ({_mb(ob.resident_full_bytes)})",
+                  delta_color="off", help="Belief stays full-size in both modes (it is updated every step).")
+    with t2.container(border=True):
+        st.metric("Tiers now", f"HOT {_mb(s_['hot_bytes'])} · WARM {_mb(s_['warm_bytes'])}",
+                  f"resident coarse {_mb(s_['resident_coarse_bytes'])}", delta_color="off")
+    with t3.container(border=True):
+        st.metric("COLD flash (storage)", _mb(s_["flash_bytes"]), f"{s_['flash_reads']} tile reads", delta_color="off")
+
+    bpath = ROOT / "onboard" / "bench.json"
+    if bpath.exists():
+        st.markdown("##### 📊 Benchmark (`python -m onboard.bench`, tracemalloc peak during boot + traverse)")
+        cases = json.loads(bpath.read_text()).get("cases", [])
+        st.dataframe(pd.DataFrame([{
+            "site": f"{c['site']} ({c['shape'][0]}×{c['shape'][1]})",
+            "peak RAM full": _mb(c["ram"]["full_peak_bytes"]), "peak RAM onboard": _mb(c["ram"]["onboard_peak_bytes"]),
+            "peak ×": c["ram"]["peak_reduction"], "state ×": c["ram"]["resident_reduction"],
+            "HOT hit": f"{c['cache']['hit_rate']:.1%}", "stalls": c["cache"]["stalls"],
+            "prefetch hit": f"{c['cache']['prefetch_hit_rate']:.0%}",
+            "replans F/O": f"{c['full']['replans']}/{c['onboard']['replans']}",
+            "driven Δ": f"{c['diff']['driven_length_pct']:+.1f}%",
+            "P(success) Δ": f"{c['diff']['initial_success_prob_pts']:+.1f} pts",
+            "wall F/O (s)": f"{c['full']['wall_s']}/{c['onboard']['wall_s']}",
+            "goal F/O": f"{c['full']['reached_goal']}/{c['onboard']['reached_goal']}"} for c in cases]),
+            hide_index=True, width="stretch")
+        st.caption("Peak RAM via tracemalloc while booting the rover and driving (dashboard replay telemetry excluded "
+                   "in both modes; tile flash = storage). Wall times include tracemalloc overhead.")
+
+
 def safe(fn) -> None:
     """Run one tab body; a bug shows as an error card instead of blanking the demo."""
     try:
@@ -759,7 +872,8 @@ def safe(fn) -> None:
 
 
 tabs = st.tabs(["🚀 Mission", "🔀 Replans", "⛰️ Cost & Hazards", "❔ Uncertainty", "🧭 Routes", "🔬 Science", "📜 Decision Log",
-                "👁️ Perception"])
-for tab, fn in zip(tabs, (tab_mission, tab_replans, tab_cost, tab_uncertainty, tab_routes, tab_science, tab_log, tab_perception)):
+                "🧠 Onboard", "👁️ Perception"])
+for tab, fn in zip(tabs, (tab_mission, tab_replans, tab_cost, tab_uncertainty, tab_routes, tab_science, tab_log,
+                          tab_onboard, tab_perception)):
     with tab:
         safe(fn)
