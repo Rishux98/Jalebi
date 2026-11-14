@@ -248,7 +248,7 @@ def make_path_animation(fig_base: go.Figure, path: Sequence[RC], dem: np.ndarray
             dict(type="buttons", direction="left", x=0.0, y=-0.02, xanchor="left", yanchor="top", showactive=False,
                  pad=dict(t=4, r=4), **btn,
                  buttons=[dict(label="▶ Play", method="animate", args=play(SPEEDS["1×"])),
-                          dict(label="⏸ Pause", method="animate",
+                          dict(label="❚❚ Pause", method="animate",
                                args=[[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate",
                                               "transition": {"duration": 0}}]),
                           dict(label="⟲ Restart", method="animate", args=play(SPEEDS["1×"], fromcurrent=False))]),

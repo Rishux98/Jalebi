@@ -7,7 +7,7 @@ ODYSSEY plans a traverse from orbital data, drives it, **discovers hazards the o
 replans on its own, and logs **every decision with the raw numbers behind it** — so a human can audit it later.
 
 ```
-python -m streamlit run app.py      # dashboard → press "💥 Inject hazard on path"
+python -m streamlit run app.py      # dashboard → press "Inject hazard on path"
 ```
 
 | What it shows | Where |

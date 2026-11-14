@@ -46,7 +46,7 @@ def test_animation_frames_and_hover(world, mode):
     assert any("Step 13 · REPLAN: P(big_rock)=0.81 > 0.60" in t for t in titles)
     assert any(t.name == "replan" for t in fig.data)
     labels = [b.label for m in fig.layout.updatemenus for b in m.buttons]
-    assert {"▶ Play", "⏸ Pause", "⟲ Restart", "0.5×", "1×", "2×", "4×"} <= set(labels)
+    assert {"▶ Play", "❚❚ Pause", "⟲ Restart", "0.5×", "1×", "2×", "4×"} <= set(labels)
     assert len(fig.layout.sliders[0].steps) == len(fig.frames)
     fig.to_json()
 

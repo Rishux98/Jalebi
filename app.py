@@ -20,12 +20,13 @@ from core.config import DEFAULT
 from core.types import CLASS_NAMES, N_CLASSES
 from perception.sensor_model import get_sensor_info
 from ui import figures as F
+from ui.icons import icon as LI
 from ui.animation import LOOP_JS, make_path_animation
 from ui.pipeline import MODES, build_routes, build_science, build_site, make_cfg, run_onboard, run_traverse
 from world.real_dem import default_tile_available
 
 ROOT = Path(__file__).resolve().parent
-st.set_page_config(page_title="ODYSSEY · MARS-09", page_icon="🛰️", layout="wide")
+st.set_page_config(page_title="ODYSSEY · MARS-09", page_icon=":material/satellite_alt:", layout="wide")
 
 MODE_DESC = {
     "shortest": "Pure distance — ignores terrain cost and risk (impassable cells are still avoided).",
@@ -33,9 +34,22 @@ MODE_DESC = {
     "safest": "Strongly avoids hazards and unknown terrain; accepts a longer route.",
     "science": "Balanced weights, routed through the science targets that fit the energy budget.",
 }
-BADGE = {"replan": "🔴 REPLAN", "hazard_detected": "🟣 SENSE", "pause_and_sense": "🟣 SENSE",
-         "keep_path": "🟢 SENSE", "select_target": "🟡 TARGET", "skip_target": "🟡 TARGET", "continue": "🟡 TARGET",
-         "plan": "🔵 MISSION", "goal_reached": "🔵 MISSION", "stop": "🔴 MISSION"}
+BADGE = {"replan": "REPLAN", "hazard_detected": "SENSE", "pause_and_sense": "SENSE", "keep_path": "SENSE",
+         "select_target": "TARGET", "skip_target": "TARGET", "continue": "TARGET",
+         "plan": "MISSION", "goal_reached": "MISSION", "stop": "MISSION"}          # plain text (tables)
+_BADGE_STYLE = {"replan": ("red", "alt_route"), "hazard_detected": ("violet", "visibility"),
+                "pause_and_sense": ("violet", "visibility"), "keep_path": ("green", "visibility"),
+                "select_target": ("orange", "target"), "skip_target": ("orange", "target"),
+                "continue": ("orange", "target"), "plan": ("blue", "flag"), "goal_reached": ("blue", "flag"),
+                "stop": ("red", "flag")}
+
+
+def badge_md(decision: str) -> str:
+    """Coloured Material-icon badge for a decision, for Streamlit markdown."""
+    if decision not in _BADGE_STYLE:
+        return decision
+    color, ic = _BADGE_STYLE[decision]
+    return f":{color}[:material/{ic}: {BADGE[decision]}]"
 
 st.markdown(f"""
 <style>
@@ -45,8 +59,8 @@ st.markdown(f"""
   .chip {{display:inline-block; padding:2px 11px; margin:0 6px 6px 0; border-radius:999px; font-size:.78rem;
           border:1px solid #2E323C; background:#1A1D24; color:#E6E6E6;}}
   .chip b {{color:#A9AFBA; font-weight:500; margin-right:4px;}}
-  .chip.ok {{border-color:{F.SAFE}; color:{F.SAFE};}} .chip.warn {{border-color:{F.CAUTION}; color:{F.CAUTION};}}
-  .chip.bad {{border-color:{F.HAZARD}; color:{F.HAZARD};}} .chip.info {{border-color:{F.PATH}; color:{F.PATH};}}
+  .chip.ok {{border-color:transparent; color:{F.SAFE};}} .chip.warn {{border-color:transparent; color:{F.CAUTION};}}
+  .chip.bad {{border-color:transparent; color:{F.HAZARD};}} .chip.info {{border-color:transparent; color:{F.PATH};}}
   .legend {{font-size:.76rem; color:#A9AFBA; margin:-.4rem 0 .6rem 0;}}
   .legend i {{display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 4px 0 10px; vertical-align:middle;}}
   .empty {{border:1px dashed #3a3d46; border-radius:12px; padding:2.2rem; text-align:center; background:#151821;}}
@@ -130,6 +144,11 @@ def _json_safe(d: dict) -> dict:
     return {k: (str(v) if isinstance(v, float) and not math.isfinite(v) else v) for k, v in d.items()}
 
 
+def sec(name: str, text: str, where=None) -> None:
+    """Section heading with a Lucide icon (``where`` = container/column, default main)."""
+    (where or st).markdown(f"##### {LI(name, 18)}{text}", unsafe_allow_html=True)
+
+
 def chip(label: str, value: str, kind: str = "") -> str:
     return f'<span class="chip {kind}"><b>{label}</b>{value}</span>'
 
@@ -146,7 +165,7 @@ MAP_LEGEND = [("path", F.PATH), ("safe", F.SAFE), ("caution", F.CAUTION), ("haza
 st.session_state.setdefault("run", None)          # None (idle) | "plan" | "traverse" | "inject" | "manual"
 sensor = get_sensor_info()
 with st.sidebar:
-    st.markdown("### 🛰️ ODYSSEY · MARS-09")
+    st.markdown("### " + LI("satellite", 22) + "ODYSSEY · MARS-09", unsafe_allow_html=True)
     sources = ["Synthetic"] + (["HiRISE south-polar DTM"] if default_tile_available() else [])
     source = st.selectbox("World source", sources, key="source",
                           help="HiRISE: real elevation (USGS controlled DTM crop, 1.2 km); terrain classes and ice "
@@ -178,7 +197,7 @@ with st.sidebar:
     _s = get_site(src, int(size), int(seed), float(lam), float(budget), int(radius), conn)
     Hs, Ws = _s.world.shape
     st.session_state.setdefault("obstacles", [])
-    with st.expander("💥 Hidden hazard / obstacles",
+    with st.expander("Hidden hazard / obstacles", icon=":material/warning:",
                      expanded=str(st.session_state.get("placement", "")).startswith("Manual")):
         placement = st.radio("Placement", ["Auto (on planned route)", "Manual (choose cells)"], key="placement",
                              help="Auto: one boulder field on the planned route. Manual: you choose where hidden "
@@ -190,8 +209,8 @@ with st.sidebar:
         else:
             frac, hz_radius = float(st.session_state.get("frac", 0.4)), int(st.session_state.get("hz_radius", 3))
             st.selectbox("Obstacle type", ["big_rock", "sand"], key="obs_kind",
-                         format_func=lambda k: "🪨 boulder field (impassable)" if k == "big_rock"
-                         else "🏜️ sand trap (costly, risky)")
+                         format_func=lambda k: "Boulder field (impassable)" if k == "big_rock"
+                         else "Sand trap (costly, risky)")
             st.slider("Vertical (row)", 0, Hs - 1, Hs // 2, key=f"obs_r-{Hs}")
             st.slider("Horizontal (column)", 0, Ws - 1, Ws // 2, key=f"obs_c-{Ws}")
             st.slider("Radius (cells)", 1, 8, 3, key="obs_rad")
@@ -203,38 +222,38 @@ with st.sidebar:
                                                    int(st.session_state.obs_rad), st.session_state.obs_kind))
 
             o1, o2 = st.columns(2)
-            o1.button("➕ Add", key="obs_add", width="stretch", on_click=_add_obstacle)
-            o2.button("🗑 Clear", key="obs_clear", width="stretch", on_click=lambda: st.session_state.obstacles.clear())
+            o1.button("Add", icon=":material/add:", key="obs_add", width="stretch", on_click=_add_obstacle)
+            o2.button("Clear", icon=":material/delete:", key="obs_clear", width="stretch", on_click=lambda: st.session_state.obstacles.clear())
             for i, (r_, c_, rad_, k_) in enumerate(st.session_state.obstacles, 1):
-                st.caption(f"{i}. {'🪨 boulders' if k_ == 'big_rock' else '🏜️ sand'} at ({r_}, {c_}) r={rad_}")
+                st.caption(f"{i}. {':material/landscape: boulders' if k_ == 'big_rock' else ':material/waves: sand'} at ({r_}, {c_}) r={rad_}")
             if not st.session_state.obstacles:
-                st.caption("No obstacles yet — set a cell and press ➕ Add.")
+                st.caption("No obstacles yet — set a cell and press **Add**.")
     b1, b2 = st.columns(2)
     if b1.button("Plan", key="plan_btn", width="stretch"):
         st.session_state.run = "plan"
     if b2.button("Run traverse", key="run_btn", type="primary", width="stretch"):
         st.session_state.run = "traverse"
     if not manual:
-        if st.button("💥 Inject hazard on path", key="inject_btn", width="stretch",
+        if st.button("Inject hazard on path", icon=":material/bolt:", key="inject_btn", width="stretch",
                      help="Plant a hidden boulder field on the planned route, then drive. The rover is not told."):
             st.session_state.run = "inject"
-    elif st.button(f"💥 Drive with my obstacles ({len(st.session_state.obstacles)})", key="manual_btn",
+    elif st.button(f"Drive with my obstacles ({len(st.session_state.obstacles)})", icon=":material/bolt:", key="manual_btn",
                    width="stretch", disabled=not st.session_state.obstacles,
                    help="Plant your obstacles as hidden ground truth, then drive. The rover is not told."):
         st.session_state.run = "manual"
-    onboard_on = st.toggle("🧠 Onboard memory mode (colibri-style tiering)", key="onboard",
+    onboard_on = st.toggle(":material/memory: Onboard memory mode (colibri-style tiering)", key="onboard",
                            help="Run the same traverse with int16/uint8 terrain in 64x64 tiles (HOT/WARM/COLD tiers, "
                                 "path-lookahead prefetch) and hierarchical A*. Needs a traverse: a summary "
-                                "appears under the metric cards, details in the 🧠 Onboard tab.")
-    loop = st.toggle("🔁 Loop animation", key="loop", help="Off: plays once. On: frames repeat and the player "
+                                "appears under the metric cards, details in the Onboard tab.")
+    loop = st.toggle(":material/repeat: Loop animation", key="loop", help="Off: plays once. On: frames repeat and the player "
                                                           "restarts automatically when it reaches the end.")
     st.caption(f"Energy budget = {budget:.2f} × {_s.direct_energy_wh:.0f} Wh (direct route) = "
                f"**{_s.cfg.sci_energy_budget_wh:.0f} Wh**")
     if sensor["source"] == "trained":
         miou = f" · mIoU = {sensor['miou']:.2f}" if sensor["miou"] is not None else ""
-        st.markdown(chip("", f"🛰️ Sensor model: trained AI4MARS U-Net{miou}", "ok"), unsafe_allow_html=True)
+        st.markdown(chip("", LI("satellite", 14) + f"Sensor model: trained AI4MARS U-Net{miou}", "ok"), unsafe_allow_html=True)
     else:
-        st.markdown(chip("", "⚠️ Sensor model: fallback confusion matrix (placeholder until trained model is added)",
+        st.markdown(chip("", LI("triangle-alert", 14) + "Sensor model: fallback confusion matrix (placeholder until trained model is added)",
                          "warn"), unsafe_allow_html=True)
 
 args = (src, int(size), int(seed), float(lam), float(budget), int(radius), conn)
@@ -285,16 +304,16 @@ def _reset_view() -> None:
 
 
 with st.sidebar:
-    with st.expander("🧭 Map view (pan / zoom)", expanded=False):
+    with st.expander("Map view (pan / zoom)", icon=":material/explore:", expanded=False):
         st.select_slider("Zoom", ZOOMS, key="view_zoom", format_func=lambda z: f"{z}×")
         _, a2, _ = st.columns(3)
-        a2.button("⬆", key="pan_up", on_click=_pan, args=(-1, 0), width="stretch")
+        a2.button("", icon=":material/arrow_upward:", key="pan_up", on_click=_pan, args=(-1, 0), width="stretch")
         l1, l2, l3 = st.columns(3)
-        l1.button("⬅", key="pan_left", on_click=_pan, args=(0, -1), width="stretch")
-        l2.button("⟲", key="pan_reset", on_click=_reset_view, width="stretch", help="Full map")
-        l3.button("➡", key="pan_right", on_click=_pan, args=(0, 1), width="stretch")
+        l1.button("", icon=":material/arrow_back:", key="pan_left", on_click=_pan, args=(0, -1), width="stretch")
+        l2.button("", icon=":material/fit_screen:", key="pan_reset", on_click=_reset_view, width="stretch", help="Full map")
+        l3.button("", icon=":material/arrow_forward:", key="pan_right", on_click=_pan, args=(0, 1), width="stretch")
         _, d2, _ = st.columns(3)
-        d2.button("⬇", key="pan_down", on_click=_pan, args=(1, 0), width="stretch")
+        d2.button("", icon=":material/arrow_downward:", key="pan_down", on_click=_pan, args=(1, 0), width="stretch")
         st.slider("Horizontal (column)", 0, W - 1, key=vk_c)
         st.slider("Vertical (row)", 0, H - 1, key=vk_r)
         g1, g2 = st.columns(2)
@@ -339,9 +358,9 @@ st.markdown(chip("world", f"{world.name} · {H}×{W} @ {world.cell_size:.2f} m")
             unsafe_allow_html=True)
 
 if run is None:
-    st.markdown(f"""<div class="empty"><h3>🛰️ Configure the mission and press <span style="color:#FF6B35">Plan</span></h3>
+    st.markdown(f"""<div class="empty"><h3>{LI("satellite", 22)}Configure the mission and press <span style="color:#FF6B35">Plan</span></h3>
     <div style="color:#A9AFBA">Pick a world, planner mode and budget in the sidebar. <b>Plan</b> computes four route options
-    from the orbital prior · <b>Run traverse</b> drives the rover · <b>💥 Inject hazard on path</b> plants a hidden boulder
+    from the orbital prior · <b>Run traverse</b> drives the rover · <b>{LI("zap", 14)}Inject hazard on path</b> plants a hidden boulder
     field the rover has to discover and avoid on its own.</div>
     <div style="margin-top:.8rem; color:#6f7682; font-size:.85rem">Site ready: {world.name} · start {world.start} → goal
     {world.goal} · direct route ≈ {site.direct_energy_wh:.0f} Wh</div></div>""", unsafe_allow_html=True)
@@ -389,21 +408,22 @@ card(cards[5], "Nodes", f"{expanded:,}",
      help_="A* expanded nodes summed over all plans; delta is the number of plans computed")
 if res is not None:
     rk = res.meta["entered_true_hazard_cells"]
-    st.markdown(chip("goal", "reached ✅" if res.reached_goal else "not reached ⛔", "ok" if res.reached_goal else "bad")
+    st.markdown(chip("goal", (LI("circle-check", 14) + "reached") if res.reached_goal else (LI("circle-x", 14) + "not reached"), "ok" if res.reached_goal else "bad")
                 + chip("driven", f"{res.steps} steps") + chip("boulder cells entered (ground-truth check)", str(rk),
                                                             "ok" if rk == 0 else "bad"), unsafe_allow_html=True)
 
 
 def onboard_strip() -> None:
-    """Main-screen summary of onboard memory mode (details in the 🧠 Onboard tab)."""
+    """Main-screen summary of onboard memory mode (details in the Onboard tab)."""
     if res is None:
-        st.info("🧠 Onboard memory mode is on — press **Run traverse** (or 💥 Inject hazard) to drive the same site "
-                "with tiered int16/uint8 memory and compare it against the full float32 rover here.")
+        st.info("Onboard memory mode is on — press **Run traverse** (or **Inject hazard**) to drive the same site "
+                "with tiered int16/uint8 memory and compare it against the full float32 rover here.",
+                icon=":material/memory:")
         return
     inj = tuple((i["rc"][0], i["rc"][1], i["radius"], i.get("kind", "big_rock")) for i in res.meta["injected"])
     ob = get_onboard(*args, mode, inj)
     ores, s_ = ob.result, ob.store_stats
-    st.markdown("##### 🧠 Onboard memory mode — same traverse, tiered compact memory (details: 🧠 Onboard tab)")
+    sec("brain", "Onboard memory mode — same traverse, tiered compact memory (details: Onboard tab)")
     oc = st.columns(4, gap="small")
     d_len = (ores.distance_m - res.distance_m) / max(res.distance_m, 1e-9)
     ork = ores.meta["entered_true_hazard_cells"]
@@ -414,7 +434,7 @@ def onboard_strip() -> None:
              f"Tile reads served from decoded RAM ({s_['requests']} reads); stalls = synchronous flash loads"),
             ("Path Δ", f"{ores.distance_m:.0f} m", f"{d_len:+.1%}",
              f"Onboard driven distance; delta vs the FULL rover ({res.distance_m:.0f} m)"),
-            ("Boulders", str(ork), "goal ✅" if ores.reached_goal else "no goal ⛔",
+            ("Boulders", str(ork), "goal reached" if ores.reached_goal else "no goal",
              "Ground-truth boulder cells entered by the onboard rover; and whether it reached the goal")]):
         with col.container(border=True):
             st.metric(lab, val, dlt, delta_color="off", help=hlp)
@@ -431,7 +451,7 @@ if loop:
 def tab_mission() -> None:
     left, right = st.columns([1.25, 1], gap="medium")
     with left:
-        st.markdown("##### 🚀 " + ("Planned route — press ▶ Play" if res is None else
+        sec("rocket", "" + ("Planned route — press ▶ Play" if res is None else
                                    "Driven trajectory (planned path ghosted) — press ▶ Play"))
         show(get_animation(args, mode, anim_run, float(frac), float(hz_radius), "3d", "after", loop, COST_ZMAX, OBST),
              "mission3d")
@@ -439,7 +459,7 @@ def tab_mission() -> None:
                 ("planned (ghost)", "#cfcfcf")])
     with right:
         if res is None:
-            st.markdown("##### 🗺️ Route options on the orbital prior")
+            sec("map", "Route options on the orbital prior")
             fig = F.shaded_map(world, "", 560, site.belief.entropy, None, "uncertainty (nats)", hmax)
             for n, p in routes.modes.items():
                 F.add_path(fig, p.path, f"{n} ({p.length_m:.0f} m, {p.success_prob:.0%})", F.ROUTE_COLORS[n],
@@ -457,9 +477,9 @@ def tab_mission() -> None:
                                  if manual else []))
             if manual:
                 st.caption(f"{len(st.session_state.obstacles)} obstacle(s) placed. Move the sliders to position the "
-                           "dotted ring, press ➕ Add, then **💥 Drive with my obstacles**.")
+                           "dotted ring, press **Add**, then **Drive with my obstacles**.")
         else:
-            st.markdown("##### 🗺️ Traverse overview")
+            sec("map", "Traverse overview")
             fig = F.shaded_map(trav.world, "", 560, res.belief.entropy, None, "uncertainty (nats)", hmax)
             F.add_rings(fig, res.meta["injected"])
             if res.plans:
@@ -474,10 +494,10 @@ def tab_mission() -> None:
             show(fig, "mission2d")
             legend(MAP_LEGEND)
             if reps:
-                st.caption(f"{len(reps)} replans (R1…R{len(reps)}). Open the **🔀 Replans** tab to compare each "
+                st.caption(f"{len(reps)} replans (R1…R{len(reps)}). Open the **Replans** tab to compare each "
                            "route before vs after, zoomed on the trigger.")
             for e in [e for e in res.log if e.decision in ("replan", "pause_and_sense", "goal_reached", "stop")][-4:]:
-                st.markdown(f"`s{e.step}` **{BADGE.get(e.decision, e.decision)}** — {e.reason}")
+                st.markdown(f"`s{e.step}` **{badge_md(e.decision)}** — {e.reason}")
 
 
 def _old_remaining(old_path: list, rover_rc: tuple) -> list:
@@ -497,14 +517,14 @@ def _diff_window(paths: list, extra: list, margin: int = 8) -> tuple[int, int, i
 
 def tab_replans() -> None:
     if res is None:
-        st.info("Run a traverse (▶ Run traverse, 💥 Inject hazard on path, or 💥 Drive with my obstacles) to compare "
+        st.info("Run a traverse (**Run traverse**, **Inject hazard on path**, or **Drive with my obstacles**) to compare "
                 "how the route changed at every replan.")
         return
     reps, plans = res.log.by_decision("replan"), res.plans
     w_disp = trav.world
     h1, h2 = st.columns([3, 1])
-    h1.markdown("##### 🗂️ Plan history — every adopted route, oldest grey → newest cyan")
-    zoom_diff = h2.toggle("🔍 Zoom to the replan area", value=True, key="hist_zoom")
+    sec("history", "Plan history — every adopted route, oldest grey → newest cyan", h1)
+    zoom_diff = h2.toggle(":material/zoom_in: Zoom to the replan area", value=True, key="hist_zoom")
     fig = F.shaded_map(w_disp, "", 520)
     F.add_rings(fig, res.meta["injected"], "hidden obstacle")
     cols = F.gradient(len(plans))
@@ -526,7 +546,7 @@ def tab_replans() -> None:
         st.success("No replans — the first plan held all the way to the goal.")
         return
 
-    st.markdown("##### 🔀 Before vs after one replan")
+    sec("git-branch", "Before vs after one replan")
     k = st.select_slider("Replan", options=list(range(1, len(reps) + 1)), value=1, key=f"replan_pick-{len(reps)}",
                          format_func=lambda i: f"R{i} · step {reps[i - 1].step}")
     e = reps[k - 1]
@@ -574,7 +594,7 @@ def tab_replans() -> None:
             ("trigger / detected boulders", F.HAZARD), ("unchanged", "#9aa0aa")])
 
     dropped, added = len(old_set - new_set), len(new_set - old_set)
-    st.markdown(f"`s{e.step}` **🔴 REPLAN R{k}** · confidence {e.confidence:.2f} — {e.reason}")
+    st.markdown(f"`s{e.step}` **:red[:material/alt_route: REPLAN R{k}]** · confidence {e.confidence:.2f} — {e.reason}")
     rows = [("trigger rule", f"{ev['threshold_name']} (threshold {ev['threshold']:g})", ""),
             ("P(big_rock) at trigger", f"{ev.get('p_big_rock', float('nan')):.2f}", ""),
             ("hazard_prob at trigger", f"{ev.get('hazard_prob', float('nan')):.2f}", ""),
@@ -596,7 +616,7 @@ def tab_cost() -> None:
     cm = res.costmap if (res is not None and cm_state == "after") else site.costmap
     st.caption("Cost per metre (Inferno; black = impassable: slope > 25° or P(big_rock) > 0.6). Hover any cell for "
                "the per-component breakdown; the same colour range is used before and after the traverse.")
-    st.markdown("##### 🎬 Rover on the cost map")
+    sec("clapperboard", "Rover on the cost map")
     show(get_animation(args, mode, anim_run, float(frac), float(hz_radius), "2d", cm_state, loop, COST_ZMAX, OBST),
          "cost_anim")
     legend([("rover / driven", F.PATH), ("remaining", "rgba(0,229,255,.4)"), ("sensor radius", "rgba(0,229,255,.55)"),
@@ -604,13 +624,13 @@ def tab_cost() -> None:
             ("impassable", "#000000")])
     c2, c3 = st.columns(2, gap="medium")
     with c2:
-        st.markdown("##### ⚠️ Hazard probability")
+        sec("triangle-alert", "Hazard probability")
         show(F.grid_map(cm.hazard_prob, F.SEQ["hazard"], "", "hazard_prob", 0, 1, height=420), "hazard")
     with c3:
-        st.markdown("##### ⛰️ Slope (from DEM)")
+        sec("mountain", "Slope (from DEM)")
         show(F.grid_map(site.layers.slope_deg, F.SEQ["slope"], "", "slope (°)", 0,
                         float(np.percentile(site.layers.slope_deg, 99.5)), height=420), "slope")
-    st.markdown("##### 🔎 Cell inspector")
+    sec("target", "Cell inspector")
     i1, i2, i3 = st.columns([1, 1, 4])
     r = i1.number_input("row", 0, H - 1, world.goal[0] // 2, key=f"insp_r-{src}-{size}")
     c = i2.number_input("col", 0, W - 1, world.goal[1] // 2, key=f"insp_c-{src}-{size}")
@@ -633,10 +653,10 @@ def tab_uncertainty() -> None:
         sk, ent_after, after_lbl, obs = 0, site.belief.entropy, "after first look", site.belief.observed_mask
     c1, c2 = st.columns(2, gap="medium")
     with c1:
-        st.markdown("##### ❔ Uncertainty: orbital prior")
+        sec("circle-help", "Uncertainty: orbital prior")
         show(F.grid_map(site.prior.entropy, F.SEQ["entropy"], "", "nats", 0, hmax, height=440), "ent_prior")
     with c2:
-        st.markdown(f"##### ❔ Uncertainty: {after_lbl}")
+        sec("circle-help", f"Uncertainty: {after_lbl}")
         fig = F.grid_map(ent_after, F.SEQ["entropy"], "", "nats", 0, hmax, height=440)
         if res is not None:
             F.add_path(fig, res.trajectory[:sk + 1], "driven", F.PATH, "solid", 2)
@@ -644,10 +664,10 @@ def tab_uncertainty() -> None:
     st.caption("Same 0 – ln 4 nats colour range on both maps: the rover's navcam looks erase uncertainty along its track.")
     c3, c4, c5 = st.columns(3, gap="medium")
     with c3:
-        st.markdown("##### 📐 P(slope > 25°)")
+        sec("ruler", "P(slope > 25°)")
         show(F.grid_map(site.layers.p_slope_exceed, F.SEQ["slope"], "", "P", 0, 1, height=380), "pslope")
     with c4:
-        st.markdown("##### 👁️ Cells observed by the navcam")
+        sec("eye", "Cells observed by the navcam")
         show(F.grid_map(obs.astype(float), [[0, F.PLOT_BG], [1, F.SAFE]], "", "observed", 0, 1, height=380,
                         showscale=False), "observed")
     with c5:
@@ -656,7 +676,7 @@ def tab_uncertainty() -> None:
         hit_prior = site.prior.class_probs.argmax(-1) == truth_now
         hit_now = b_now.class_probs.argmax(-1) == truth_now
         seen = b_now.observed_mask
-        st.markdown(f"##### 🧭 Belief: observed cells {hit_prior[seen].mean():.0%} → {hit_now[seen].mean():.0%} correct")
+        sec("compass", f"Belief: observed cells {hit_prior[seen].mean():.0%} → {hit_now[seen].mean():.0%} correct")
         show(F.class_map(b_now.class_probs.argmax(-1), "", 380), "cls_belief")
         st.caption(f"Whole map: {hit_prior.mean():.0%} → {hit_now.mean():.0%} (only {seen.mean():.0%} of cells were "
                    "observed; the rest is still the orbital prior).")
@@ -752,11 +772,11 @@ def tab_log() -> None:
             if chosen is not None else None
         show(fig, "log_map", window=win)
     if chosen is not None:
-        st.markdown(f"**s{chosen.step} · {BADGE.get(chosen.decision, chosen.decision)}** · confidence "
+        st.markdown(f"**s{chosen.step} · {badge_md(chosen.decision)}** · confidence "
                     f"{chosen.confidence:.2f} (= 1 − H/ln 4 at the trigger cell) — {chosen.reason}")
         with st.expander("Evidence (raw numbers exactly as logged)", expanded=False):
             st.json(_json_safe(chosen.evidence), expanded=True)
-    st.markdown("##### 🔎 Decisions about one cell")
+    sec("target", "Decisions about one cell")
     l1, l2, l3 = st.columns([1, 1, 4])
     lr = l1.number_input("row", 0, H - 1, int(chosen.evidence["cell"][0]) if chosen else 0,
                          key=f"log_r-{lkey}-{id(chosen)}")
@@ -765,22 +785,22 @@ def tab_log() -> None:
     hits = log.entries_for_cell(int(lr), int(lc))
     l3.write(f"{len(hits)} decision(s) at ({lr}, {lc})")
     for e in hits:
-        st.markdown(f"- `s{e.step}` **{BADGE.get(e.decision, e.decision)}** — {e.reason}")
+        st.markdown(f"- `s{e.step}` **{badge_md(e.decision)}** — {e.reason}")
 
 
 def tab_perception() -> None:
     trained = sensor["source"] == "trained"
     c1, c2 = st.columns([1.1, 1], gap="medium")
     with c1:
-        st.markdown("##### 👁️ Sensor model")
+        sec("eye", "Sensor model")
         show(F.confusion_fig(sensor["confusion"], ("Trained AI4MARS U-Net" if trained else "Fallback matrix")
                              + " — rows: true class · columns: observed class"), "confusion")
         st.caption("This matrix is the rover's sensor model: P(observed class | true class).")
         p = float(sensor["confusion"][2, 0])
-        st.caption(f"🟧 Outlined cell — how often sand is mistaken for safe soil: **{p:.0%}**. That error rate flows "
+        st.caption(f":orange[:material/crop_square:] Outlined cell — how often sand is mistaken for safe soil: **{p:.0%}**. That error rate flows "
                    "straight into every Bayesian belief update, so the rover can't simply trust a 'soil' reading.")
     with c2:
-        st.markdown("##### 📊 Model quality")
+        sec("chart-column", "Model quality")
         if trained:
             st.metric("Validation mIoU", f"{sensor['miou']:.3f}" if sensor["miou"] is not None else "—")
             if sensor["per_class_iou"]:
@@ -799,7 +819,7 @@ def tab_perception() -> None:
     samples = sorted((ROOT / "perception" / "samples").glob("*.png")) or \
         sorted((ROOT / "outputs" / "perception").glob("sample_*.png"))
     if samples:
-        st.markdown("##### 🖼️ MC-dropout samples (image | prediction | entropy)")
+        sec("image", "MC-dropout samples (image | prediction | entropy)")
         cols = st.columns(3, gap="small")
         for i, pth in enumerate(samples[:9]):
             cols[i % 3].image(str(pth), width="stretch", caption=pth.stem)
@@ -812,11 +832,11 @@ def _mb(b: float) -> str:
 def tab_onboard() -> None:
     st.caption("Tiering idea adapted from colibri (MoE expert offloading) → terrain tiles.")
     if not onboard_on:
-        st.info("Turn on **🧠 Onboard memory mode** in the sidebar to run the same traverse with compact int16/uint8 "
+        st.info("Turn on **Onboard memory mode** in the sidebar to run the same traverse with compact int16/uint8 "
                 "terrain in tiered 64×64 tiles (HOT / WARM / COLD) and hierarchical planning.")
         return
     if res is None:
-        st.info("Run a traverse (▶ Run traverse, 💥 Inject hazard, or 💥 Drive with my obstacles): onboard mode then "
+        st.info("Run a traverse (**Run traverse**, **Inject hazard**, or **Drive with my obstacles**): onboard mode then "
                 "drives the same site with the same hidden hazards and is compared against it here.")
         return
     injected = tuple((i["rc"][0], i["rc"][1], i["radius"], i.get("kind", "big_rock")) for i in res.meta["injected"])
@@ -825,7 +845,7 @@ def tab_onboard() -> None:
     err = ob.error
     # ---- precision is never changed silently: error report always first
     with st.container(border=True):
-        st.markdown(f"**📏 Quantisation error** — max elevation error **{err['max_elev_err_m'] * 100:.1f} cm** "
+        st.markdown(f":material/straighten: **Quantisation error** — max elevation error **{err['max_elev_err_m'] * 100:.1f} cm** "
                     f"(int16 at {err['scale_m'] * 100:.0f} cm{', auto-widened' if err['auto_widened'] else ''}) ≈ "
                     f"**{err['noise_to_error_ratio']:.0f}× below** the {err['dem_noise_sigma_m']:.1f} m DEM noise · "
                     f"max slope error **{err['max_slope_err_deg_uint8_storage']:.2f}°** as stored "
@@ -843,7 +863,7 @@ def tab_onboard() -> None:
 
     left, right = st.columns([1.1, 1], gap="medium")
     with left:
-        st.markdown("##### 🧱 Tile tiers along the traverse")
+        sec("layers", "Tile tiers along the traverse")
         k = st.slider("Step", 0, len(ob.tier_frames) - 1, min(len(ob.tier_frames) - 1, ores.steps // 3),
                       key=f"tier_step-{len(ob.tier_frames)}")
         plan_k = [p for p in ores.plans if p.meta.get("step", 0) <= k][-1] if ores.plans else None
@@ -853,7 +873,7 @@ def tab_onboard() -> None:
         legend([("HOT (decoded RAM)", "#FF6B35"), ("WARM (compressed RAM)", "#F4A261"), ("COLD (flash)", "#8c8c96"),
                 ("resident coarse map", F.SAFE), ("rover / planned path", F.PATH)])
     with right:
-        st.markdown("##### 🛣️ FULL vs ONBOARD paths")
+        sec("route", "FULL vs ONBOARD paths")
         fig = F.shaded_map(ob.world, "", 520)
         F.add_rings(fig, ores.meta["injected"], "hidden obstacle")
         F.add_path(fig, res.trajectory, f"FULL ({res.distance_m:.0f} m)", "#ffffff", "solid", 2.5)
@@ -877,7 +897,7 @@ def tab_onboard() -> None:
                    "the coarse-corridor + windowed A* and from uint8 cost rounding; decision rules are identical.")
         k_gap = int(np.argmax(gap))
         r_g, c_g = int(B_[k_gap][0]), int(B_[k_gap][1])
-        st.markdown(f"##### 🔍 Zoom at the biggest difference (step {k_gap}, cell ({r_g}, {c_g}))")
+        sec("zoom-in", f"Zoom at the biggest difference (step {k_gap}, cell ({r_g}, {c_g}))")
         zfig = go.Figure(fig)
         zfig.update_layout(height=380)
         show(zfig, "onboard_paths_zoom", window=(r_g, c_g, 14))
@@ -899,7 +919,7 @@ def tab_onboard() -> None:
         st.dataframe(pd.DataFrame(cmp_rows, columns=["", "FULL", "ONBOARD"]).astype(str), hide_index=True,
                      width="stretch")
 
-    st.markdown("##### 🧮 Memory: full float32 vs onboard compact")
+    sec("calculator", "Memory: full float32 vs onboard compact")
     rows = [{"layer": n, "full": _mb(f), "onboard": _mb(o), "reduction": f"{f / o:.0f}×" if o else "not stored",
              "format": how} for n, f, o, how in ob.layers]
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
@@ -916,7 +936,7 @@ def tab_onboard() -> None:
 
     bpath = ROOT / "onboard" / "bench.json"
     if bpath.exists():
-        st.markdown("##### 📊 Benchmark (`python -m onboard.bench`, tracemalloc peak during boot + traverse)")
+        sec("chart-column", "Benchmark (`python -m onboard.bench`, tracemalloc peak during boot + traverse)")
         cases = json.loads(bpath.read_text()).get("cases", [])
         st.dataframe(pd.DataFrame([{
             "site": f"{c['site']} ({c['shape'][0]}×{c['shape'][1]})",
@@ -946,8 +966,9 @@ if onboard_on:
     safe(onboard_strip)
 
 
-tabs = st.tabs(["🚀 Mission", "🔀 Replans", "⛰️ Cost & Hazards", "❔ Uncertainty", "🧭 Routes", "🔬 Science", "📜 Decision Log",
-                "🧠 Onboard", "👁️ Perception"])
+tabs = st.tabs([":material/rocket_launch: Mission", ":material/alt_route: Replans", ":material/terrain: Cost & Hazards",
+                ":material/help: Uncertainty", ":material/explore: Routes", ":material/biotech: Science",
+                ":material/receipt_long: Decision Log", ":material/memory: Onboard", ":material/visibility: Perception"])
 for tab, fn in zip(tabs, (tab_mission, tab_replans, tab_cost, tab_uncertainty, tab_routes, tab_science, tab_log,
                           tab_onboard, tab_perception)):
     with tab:
