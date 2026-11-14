@@ -26,6 +26,7 @@ from ui.pipeline import MODES, build_routes, build_science, build_site, make_cfg
 from world.real_dem import default_tile_available
 
 ROOT = Path(__file__).resolve().parent
+TAB_ONBOARD = ":material/memory: Onboard"
 st.set_page_config(page_title="ODYSSEY · MARS-09", page_icon=":material/satellite_alt:", layout="wide")
 
 MODE_DESC = {
@@ -54,8 +55,9 @@ def badge_md(decision: str) -> str:
 st.markdown(f"""
 <style>
   .block-container {{padding-top: 3.6rem; padding-bottom: 2rem;}}
-  .ody-title {{font-size: 1.55rem; font-weight: 700; letter-spacing: .02em; margin: 0 0 .35rem 0;}}
+  .ody-title {{font-size: 2.15rem; font-weight: 700; letter-spacing: .02em; margin: 0 0 .35rem 0;}}
   .ody-title span {{color: #FF6B35;}}
+  .ody-side-title {{font-size: 1.5rem; font-weight: 700; letter-spacing: .02em; margin: 0 0 .6rem 0;}}
   .chip {{display:inline-block; padding:2px 11px; margin:0 6px 6px 0; border-radius:999px; font-size:.78rem;
           border:1px solid #2E323C; background:#1A1D24; color:#E6E6E6;}}
   .chip b {{color:#A9AFBA; font-weight:500; margin-right:4px;}}
@@ -165,7 +167,7 @@ MAP_LEGEND = [("path", F.PATH), ("safe", F.SAFE), ("caution", F.CAUTION), ("haza
 st.session_state.setdefault("run", None)          # None (idle) | "plan" | "traverse" | "inject" | "manual"
 sensor = get_sensor_info()
 with st.sidebar:
-    st.markdown("### " + LI("satellite", 22) + "ODYSSEY · MARS-09", unsafe_allow_html=True)
+    st.markdown('<div class="ody-side-title">' + LI("satellite", 26) + "ODYSSEY · MARS-09</div>", unsafe_allow_html=True)
     sources = ["Synthetic"] + (["HiRISE south-polar DTM"] if default_tile_available() else [])
     source = st.selectbox("World source", sources, key="source",
                           help="HiRISE: real elevation (USGS controlled DTM crop, 1.2 km); terrain classes and ice "
@@ -241,10 +243,14 @@ with st.sidebar:
                    width="stretch", disabled=not st.session_state.obstacles,
                    help="Plant your obstacles as hidden ground truth, then drive. The rover is not told."):
         st.session_state.run = "manual"
-    onboard_on = st.toggle(":material/memory: Onboard memory mode (colibri-style tiering)", key="onboard",
+    onboard_on = st.toggle(":material/memory: Onboard memory mode", key="onboard",
                            help="Run the same traverse with int16/uint8 terrain in 64x64 tiles (HOT/WARM/COLD tiers, "
                                 "path-lookahead prefetch) and hierarchical A*. Needs a traverse: a summary "
                                 "appears under the metric cards, details in the Onboard tab.")
+    if onboard_on:
+        st.button("Open Onboard tab", icon=":material/arrow_forward:", key="goto_onboard", width="stretch",
+                  on_click=lambda: st.session_state.update(main_tab=TAB_ONBOARD),
+                  help="Jump straight to the Onboard tab (tiers, FULL vs ONBOARD paths, memory table).")
     loop = st.toggle(":material/repeat: Loop animation", key="loop", help="Off: plays once. On: frames repeat and the player "
                                                           "restarts automatically when it reaches the end.")
     st.caption(f"Energy budget = {budget:.2f} × {_s.direct_energy_wh:.0f} Wh (direct route) = "
@@ -968,7 +974,8 @@ if onboard_on:
 
 tabs = st.tabs([":material/rocket_launch: Mission", ":material/alt_route: Replans", ":material/terrain: Cost & Hazards",
                 ":material/help: Uncertainty", ":material/explore: Routes", ":material/biotech: Science",
-                ":material/receipt_long: Decision Log", ":material/memory: Onboard", ":material/visibility: Perception"])
+                ":material/receipt_long: Decision Log", TAB_ONBOARD, ":material/visibility: Perception"],
+               key="main_tab", on_change="rerun")
 for tab, fn in zip(tabs, (tab_mission, tab_replans, tab_cost, tab_uncertainty, tab_routes, tab_science, tab_log,
                           tab_onboard, tab_perception)):
     with tab:
