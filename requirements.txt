@@ -4,6 +4,6 @@ numpy>=2.0,<3
 scipy>=1.13
 matplotlib>=3.8
 plotly>=5.20,<8
-streamlit>=1.40
+streamlit>=1.67  # st.tabs(key=..., on_change=...) for the Onboard-tab shortcut
 rasterio>=1.3
 pandas>=2.0
