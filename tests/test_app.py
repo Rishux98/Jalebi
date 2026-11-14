@@ -83,6 +83,17 @@ def test_app_click_through():
     assert not at.exception
     at.sidebar.button(key="plan_btn").click().run()
     assert not at.exception
+    # 4-way movement + map view navigation
+    at.sidebar.radio(key="movement").set_value("4-way (horizontal / vertical only)").run()
+    assert not at.exception
+    at.sidebar.select_slider(key="view_zoom").set_value(4).run()
+    for b in ("pan_right", "pan_down", "pan_left", "pan_up", "ctr_goal", "ctr_start", "pan_reset"):
+        at.sidebar.button(key=b).click().run()
+        assert not at.exception, b
+    at.sidebar.select_slider(key="view_zoom").set_value(2).run()
+    at.sidebar.button(key="inject_btn").click().run()
+    assert not at.exception
+    at.sidebar.radio(key="movement").set_value("8-way (diagonals)").run()
     from world.real_dem import default_tile_available
     if default_tile_available():                                       # real HiRISE terrain end-to-end
         at.sidebar.selectbox(key="source").select("HiRISE south-polar DTM").run()

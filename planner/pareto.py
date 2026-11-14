@@ -94,7 +94,7 @@ def _rescore(plan: Plan, reference: CostMap, truth: CostMap | None, cell_size: f
 
 
 def plan_via(costmap: CostMap, start: RC, waypoints: Sequence[RC], goal: RC, cell_size: float = 1.0,
-             risk_weight: float = 0.0, mode: str = "science") -> Plan:
+             risk_weight: float = 0.0, mode: str = "science", connectivity: int = 8) -> Plan:
     """Chain A* segments start -> waypoints... -> goal into one Plan.
 
     Returns ``Plan(path=[])`` with ``meta["reason"] = "waypoint_unreachable"`` and
@@ -105,7 +105,7 @@ def plan_via(costmap: CostMap, start: RC, waypoints: Sequence[RC], goal: RC, cel
     path: list[RC] = [stops[0]]
     expanded = 0
     for i, (a, b) in enumerate(zip(stops, stops[1:])):
-        leg = astar(costmap, a, b, cell_size, risk_weight, mode)
+        leg = astar(costmap, a, b, cell_size, risk_weight, mode, connectivity)
         expanded += leg.expanded_nodes
         if not leg.found:
             return Plan(path=[], success_prob=0.0, mode=mode, expanded_nodes=expanded,
@@ -130,8 +130,8 @@ def plan_modes(layers: TerrainLayers, belief: Belief, start: RC, goal: RC, cfg: 
             continue
         mcfg, rw = mode_config(mode, cfg)
         cm = ref if mcfg is cfg else costmap_from_belief(layers, belief, mcfg)
-        p = (plan_via(cm, start, science_waypoints, goal, cell_size, rw, mode) if mode == "science"
-             else astar(cm, start, goal, cell_size, rw, mode))
+        p = (plan_via(cm, start, science_waypoints, goal, cell_size, rw, mode, cfg.grid_connectivity)
+             if mode == "science" else astar(cm, start, goal, cell_size, rw, mode, cfg.grid_connectivity))
         out[mode] = _rescore(p, ref, truth, cell_size, belief.entropy)
     return out
 
@@ -142,7 +142,7 @@ def sweep_risk(reference: CostMap, start: RC, goal: RC, cfg: Config = DEFAULT, c
     lo, hi, n = cfg.pareto_sweep
     plans = []
     for rw in np.linspace(lo, hi, int(n)):
-        p = astar(reference, start, goal, cell_size, float(rw), mode=f"rw={rw:g}")
+        p = astar(reference, start, goal, cell_size, float(rw), mode=f"rw={rw:g}", connectivity=cfg.grid_connectivity)
         plans.append(_rescore(p, reference, truth, cell_size, entropy))
     return plans
 

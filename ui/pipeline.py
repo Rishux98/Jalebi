@@ -26,10 +26,10 @@ from world.synthetic import make_world
 MODES = ("shortest", "balanced", "safest", "science")
 
 
-def make_cfg(lambda_unc: float, budget_wh: float, sensor_radius: int) -> Config:
-    """Config with the dashboard's sidebar overrides."""
+def make_cfg(lambda_unc: float, budget_wh: float, sensor_radius: int, connectivity: int = 8) -> Config:
+    """Config with the dashboard's sidebar overrides (connectivity 8 = diagonals, 4 = horizontal/vertical only)."""
     return DEFAULT.replace(lambda_unc=float(lambda_unc), sci_energy_budget_wh=float(budget_wh),
-                           sensor_radius=int(sensor_radius))
+                           sensor_radius=int(sensor_radius), grid_connectivity=int(connectivity))
 
 
 @dataclass
@@ -83,7 +83,8 @@ def build_site(size: int, seed: int, cfg: Config, source: str = "synthetic",
     prior = init_prior(w, cfg, seed)
     b = sense(prior, w, w.start, np.random.default_rng(seed), cfg, C)
     cm = costmap_from_belief(L, b, cfg)
-    direct = astar(cm, w.start, w.goal, w.cell_size, cfg.pareto_risk_balanced).energy_wh
+    direct = astar(cm, w.start, w.goal, w.cell_size, cfg.pareto_risk_balanced,
+                   connectivity=cfg.grid_connectivity).energy_wh
     if budget_factor is not None:
         cfg = cfg.replace(sci_energy_budget_wh=float(budget_factor) * direct)
     return Site(w, L, prior, b, cm, build_costmap(L, one_hot_probs(w.true_class), cfg), C, src, cfg, direct)

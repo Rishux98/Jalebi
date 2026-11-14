@@ -205,8 +205,9 @@ class Rover:
     def _route(self, pm: CostMap, start: RC | None = None) -> Plan:
         s = self.rc if start is None else start
         if self.targets:
-            return plan_via(pm, s, self.waypoints, self.goal, self.cs, self.risk_weight, self.mode)
-        return astar(pm, s, self.goal, self.cs, self.risk_weight, self.mode)
+            return plan_via(pm, s, self.waypoints, self.goal, self.cs, self.risk_weight, self.mode,
+                            self.cfg.grid_connectivity)
+        return astar(pm, s, self.goal, self.cs, self.risk_weight, self.mode, self.cfg.grid_connectivity)
 
     def _route_or_retreat(self, pm: CostMap) -> Plan:
         """Route from the current cell; if the rover itself is boxed in (first leg fails), back up along its own

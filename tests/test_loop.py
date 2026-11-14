@@ -173,3 +173,13 @@ def test_inject_needs_room():
     rover = Rover(w, DEFAULT, "balanced", seed=3, confusion=FALLBACK_CONFUSION)
     with pytest.raises(ValueError):
         rover.inject_hazard_on_path(0.99, 3)
+
+
+def test_four_connected_rover_moves_only_horizontally_or_vertically():
+    w = make_world(N, N, seed=3)
+    cfg = DEFAULT.replace(grid_connectivity=4)
+    rover = Rover(w, cfg, "balanced", seed=3, confusion=FALLBACK_CONFUSION)
+    rover.inject_hazard_on_path(0.4, 3)
+    res = rover.run_to_goal()
+    assert res.reached_goal
+    assert all(abs(r1 - r0) + abs(c1 - c0) == 1 for (r0, c0), (r1, c1) in zip(res.trajectory, res.trajectory[1:]))

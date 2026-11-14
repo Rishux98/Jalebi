@@ -181,3 +181,22 @@ def test_200x200_under_2s(world_cm) -> None:
     t0 = time.perf_counter()
     astar(CostMap(c, np.zeros_like(c)), (0, 0), (199, 199), risk_weight=1.0)
     assert time.perf_counter() - t0 < 2.0
+
+
+# ----------------------------------------------------------------- 4-connected (horizontal / vertical only)
+def test_four_connected_manhattan_and_no_diagonals():
+    cm = _cm(np.zeros((20, 30), np.float32))
+    p = astar(cm, (2, 3), (15, 25), connectivity=4)
+    assert p.found and p.meta["connectivity"] == 4
+    assert all(abs(r1 - r0) + abs(c1 - c0) == 1 for (r0, c0), (r1, c1) in zip(p.path, p.path[1:]))
+    assert p.length_m == pytest.approx(13 + 22)                       # Manhattan distance
+    assert astar(cm, (2, 3), (15, 25)).length_m < p.length_m          # 8-way is shorter
+
+
+def test_four_connected_detours_around_wall_and_validates():
+    cost = np.zeros((10, 10), np.float32)
+    cost[1:, 5] = np.inf                                              # wall with a gap only at row 0
+    p = astar(_cm(cost), (9, 0), (9, 9), connectivity=4)
+    assert p.found and (0, 5) in p.path
+    with pytest.raises(ValueError):
+        astar(_cm(cost), (0, 0), (9, 9), connectivity=6)

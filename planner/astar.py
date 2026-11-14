@@ -80,8 +80,8 @@ def evaluate_path(costmap: CostMap, path: Sequence[RC], cell_size: float = 1.0,
 
 
 def astar(costmap: CostMap, start: RC, goal: RC, cell_size: float = 1.0,
-          risk_weight: float = 0.0, mode: str = "balanced") -> Plan:
-    """Minimum-cost 8-connected path from ``start`` to ``goal``.
+          risk_weight: float = 0.0, mode: str = "balanced", connectivity: int = 8) -> Plan:
+    """Minimum-cost 8-connected (or 4-connected: horizontal/vertical moves only) path from ``start`` to ``goal``.
 
     Args:
         costmap: per-cell cost factor (inf = impassable) and hazard_prob.
@@ -89,13 +89,14 @@ def astar(costmap: CostMap, start: RC, goal: RC, cell_size: float = 1.0,
         cell_size: metres per cell.
         risk_weight: weight of the -log(1 - hazard) term (0 = ignore hazard probability).
         mode: label stored in the Plan.
+        connectivity: 8 (default, diagonals allowed) or 4 (horizontal/vertical only; Manhattan heuristic).
 
     Returns:
         Plan. ``Plan(path=[])`` with ``success_prob=0`` if start/goal is impassable
         (``expanded_nodes=0``, no search) or the goal is unreachable (actual expansion count).
 
     Raises:
-        ValueError: start or goal out of bounds, or negative risk_weight.
+        ValueError: start or goal out of bounds, negative risk_weight, or connectivity not 4/8.
     """
     t0 = time.perf_counter()
     shape = costmap.shape
@@ -104,7 +105,9 @@ def astar(costmap: CostMap, start: RC, goal: RC, cell_size: float = 1.0,
     gr, gc = _check_cell(goal, shape, "goal")
     if risk_weight < 0:
         raise ValueError(f"risk_weight must be >= 0, got {risk_weight}")
-    meta = {"risk_weight": float(risk_weight), "cell_size": float(cell_size)}
+    if connectivity not in (4, 8):
+        raise ValueError(f"connectivity must be 4 or 8, got {connectivity}")
+    meta = {"risk_weight": float(risk_weight), "cell_size": float(cell_size), "connectivity": int(connectivity)}
     cost = costmap.cost
     if not (np.isfinite(cost[sr, sc]) and np.isfinite(cost[gr, gc])):
         meta.update(reason="start_or_goal_impassable", runtime_s=time.perf_counter() - t0)
@@ -121,10 +124,11 @@ def astar(costmap: CostMap, start: RC, goal: RC, cell_size: float = 1.0,
     else:
         risk = [0.0] * (h_ * w_)
     hscale = cell_size * (1.0 + float(cost[finite].min()))      # cheapest possible metre
-    diag_extra = SQRT2 - 1.0
+    # octile heuristic for 8-connected; with diag_extra = 1 the same formula is Manhattan (4-connected)
+    diag_extra = SQRT2 - 1.0 if connectivity == 8 else 1.0
     moves = ((-1, 0, cell_size), (1, 0, cell_size), (0, -1, cell_size), (0, 1, cell_size),
              (-1, -1, SQRT2 * cell_size), (-1, 1, SQRT2 * cell_size),
-             (1, -1, SQRT2 * cell_size), (1, 1, SQRT2 * cell_size))
+             (1, -1, SQRT2 * cell_size), (1, 1, SQRT2 * cell_size))[:connectivity]
 
     n = h_ * w_
     g = [math.inf] * n

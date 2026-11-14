@@ -25,29 +25,30 @@ st.set_page_config(page_title="ODYSSEY · MARS-09", page_icon="🛰️", layout=
 
 # =========================================================================== cached pipeline
 @st.cache_resource(show_spinner="Building site: DEM, terrain layers, orbital prior…", max_entries=8)
-def get_site(src: str, size: int, seed: int, lam: float, budget: float, radius: int):
+def get_site(src: str, size: int, seed: int, lam: float, budget: float, radius: int, conn: int):
     """``budget`` is a multiple of the direct balanced route's energy (works for any site size)."""
-    return build_site(size, seed, make_cfg(lam, DEFAULT.sci_energy_budget_wh, radius), source=src,
+    return build_site(size, seed, make_cfg(lam, DEFAULT.sci_energy_budget_wh, radius, conn), source=src,
                       budget_factor=budget)
 
 
 @st.cache_resource(show_spinner="Ranking science targets…", max_entries=8)
-def get_science(src: str, size: int, seed: int, lam: float, budget: float, radius: int):
-    return build_science(get_site(src, size, seed, lam, budget, radius))
+def get_science(src: str, size: int, seed: int, lam: float, budget: float, radius: int, conn: int):
+    return build_science(get_site(src, size, seed, lam, budget, radius, conn))
 
 
 @st.cache_resource(show_spinner="Planning route options + risk sweep…", max_entries=8)
-def get_routes(src: str, size: int, seed: int, lam: float, budget: float, radius: int):
-    return build_routes(get_site(src, size, seed, lam, budget, radius),
-                        get_science(src, size, seed, lam, budget, radius))
+def get_routes(src: str, size: int, seed: int, lam: float, budget: float, radius: int, conn: int):
+    return build_routes(get_site(src, size, seed, lam, budget, radius, conn),
+                        get_science(src, size, seed, lam, budget, radius, conn))
 
 
 @st.cache_resource(show_spinner="Driving the rover…", max_entries=16)
-def get_traverse(src: str, size: int, seed: int, lam: float, budget: float, radius: int, mode: str, inject: bool,
+def get_traverse(src: str, size: int, seed: int, lam: float, budget: float, radius: int, conn: int, mode: str,
+                 inject: bool,
                  frac: float, hz_radius: float):
-    site = get_site(src, size, seed, lam, budget, radius)
+    site = get_site(src, size, seed, lam, budget, radius, conn)
     return run_traverse(size, seed, site.cfg, mode, inject, frac, hz_radius, site,
-                        get_science(src, size, seed, lam, budget, radius), source=src)
+                        get_science(src, size, seed, lam, budget, radius, conn), source=src)
 
 
 def _json_safe(d: dict) -> dict:
@@ -77,6 +78,10 @@ with st.sidebar:
                        help="Budget = this × energy of the balanced direct start→goal route; the extra pays for "
                             "science detours. 1.45× ≈ 800 Wh on the 200×200 synthetic site.")
     radius = st.slider("Sensor radius (cells)", 3, 12, int(DEFAULT.sensor_radius), key="radius")
+    movement = st.radio("Rover movement", ["8-way (diagonals)", "4-way (horizontal / vertical only)"],
+                        key="movement", help="4-way: the rover moves only up/down/left/right — simpler, grid-aligned "
+                                             "routes (Manhattan distance), usually a little longer.")
+    conn = 4 if movement.startswith("4") else 8
     with st.expander("Hidden hazard"):
         frac = st.slider("Position along route", 0.1, 0.9, 0.4, 0.05, key="frac")
         hz_radius = st.slider("Boulder-field radius (cells)", 1, 6, 3, key="hz_radius")
@@ -88,13 +93,13 @@ with st.sidebar:
     if st.button("💥 Inject hazard on path", key="inject_btn", width="stretch",
                  help="Plant a hidden boulder field on the planned route, then drive. The rover is not told."):
         st.session_state.run = "inject"
-    _s = get_site(src, int(size), int(seed), float(lam), float(budget), int(radius))
+    _s = get_site(src, int(size), int(seed), float(lam), float(budget), int(radius), conn)
     st.caption(f"Energy budget = {budget:.2f} × {_s.direct_energy_wh:.0f} Wh (direct route) = "
                f"**{_s.cfg.sci_energy_budget_wh:.0f} Wh**")
     st.caption("Sensor model: " + ("trained AI4MARS confusion matrix" if (ROOT / DEFAULT.confusion_path).exists()
                                    else "fallback confusion matrix (train on Colab for the real one)"))
 
-args = (src, int(size), int(seed), float(lam), float(budget), int(radius))
+args = (src, int(size), int(seed), float(lam), float(budget), int(radius), conn)
 site = get_site(*args)
 sci = get_science(*args)
 routes = get_routes(*args)
@@ -105,9 +110,73 @@ if st.session_state.run is not None:
 res = trav.result if trav else None
 plan = routes.modes.get(mode) or routes.modes["balanced"]
 
+# =========================================================================== map view (pan / zoom)
+H, W = world.shape
+ZOOMS = [1, 2, 4, 8]
+vk_r, vk_c = f"view_r-{H}", f"view_c-{W}"            # keyed by map size so stale centres never exceed bounds
+st.session_state.setdefault("view_zoom", 1)
+st.session_state.setdefault(vk_r, H // 2)
+st.session_state.setdefault(vk_c, W // 2)
+
+
+def _clamp_center(r: float, c: float) -> tuple[int, int]:
+    """Clamp a view centre so the zoom window stays inside the map (every pan press then moves the view)."""
+    z = max(int(st.session_state.view_zoom), 1)
+    hr, hc = H / (2 * z), W / (2 * z)
+    return int(round(np.clip(r, hr, H - hr))), int(round(np.clip(c, hc, W - hc)))
+
+
+def _pan(dr: int, dc: int) -> None:
+    """Move the view by a quarter of the visible window (callback, runs before the widgets)."""
+    z = max(int(st.session_state.view_zoom), 1)
+    r, c = _clamp_center(st.session_state[vk_r], st.session_state[vk_c])
+    r, c = _clamp_center(r + dr * max(1, H // (4 * z)), c + dc * max(1, W // (4 * z)))
+    st.session_state[vk_r], st.session_state[vk_c] = min(r, H - 1), min(c, W - 1)
+
+
+def _center(rc: tuple[int, int]) -> None:
+    r, c = _clamp_center(rc[0], rc[1])
+    st.session_state[vk_r], st.session_state[vk_c] = min(r, H - 1), min(c, W - 1)
+
+
+def _reset_view() -> None:
+    st.session_state.view_zoom = 1
+    _center((H // 2, W // 2))
+
+
+with st.sidebar:
+    with st.expander("🧭 Map view (pan / zoom)", expanded=False):
+        st.select_slider("Zoom", ZOOMS, key="view_zoom", format_func=lambda z: f"{z}×")
+        _, a2, _ = st.columns(3)
+        a2.button("⬆", key="pan_up", on_click=_pan, args=(-1, 0), width="stretch")
+        l1, l2, l3 = st.columns(3)
+        l1.button("⬅", key="pan_left", on_click=_pan, args=(0, -1), width="stretch")
+        l2.button("⟲", key="pan_reset", on_click=_reset_view, width="stretch", help="Full map")
+        l3.button("➡", key="pan_right", on_click=_pan, args=(0, 1), width="stretch")
+        _, d2, _ = st.columns(3)
+        d2.button("⬇", key="pan_down", on_click=_pan, args=(1, 0), width="stretch")
+        st.slider("Horizontal (column)", 0, W - 1, key=vk_c)
+        st.slider("Vertical (row)", 0, H - 1, key=vk_r)
+        g1, g2 = st.columns(2)
+        g1.button("Start", key="ctr_start", on_click=_center, args=(world.start,), width="stretch")
+        g2.button("Goal", key="ctr_goal", on_click=_center, args=(world.goal,), width="stretch")
+        st.caption("Applies to every 2-D map. You can also drag to pan and scroll to zoom inside a map.")
+
+
+def show(fig, key: str) -> None:
+    """Render a Plotly figure; 2-D maps get the sidebar pan/zoom window, drag = pan, wheel = zoom."""
+    z = int(st.session_state.view_zoom)
+    if fig.layout.yaxis.scaleanchor == "x" and z > 1:
+        hr, hc = H / (2 * z), W / (2 * z)
+        r0 = float(np.clip(st.session_state[vk_r], hr, H - hr))
+        c0 = float(np.clip(st.session_state[vk_c], hc, W - hc))
+        fig.update_xaxes(range=[c0 - hc - 0.5, c0 + hc - 0.5])
+        fig.update_yaxes(range=[r0 + hr - 0.5, r0 - hr - 0.5])
+    fig.update_layout(dragmode="pan")
+    st.plotly_chart(fig, key=key, config={"scrollZoom": True, "displaylogo": False})
+
 # =========================================================================== header
 st.markdown("## ODYSSEY — autonomous traverse planning under uncertainty")
-H, W = world.shape
 site_txt = (f"{world.name} · {H}×{W} cells @ {world.cell_size:.2f} m ({H * world.cell_size:.0f}×"
             f"{W * world.cell_size:.0f} m) · seed {world.seed}")
 if res is None:
@@ -155,7 +224,7 @@ with tabs[0]:
                    ("injected hazard", inj, F.HAZARD, "circle-open"),
                    ("targets", [t.rc for t in trav.targets], F.TARGET, "diamond")]
         pts += [("start", [world.start], "#1baf7a", "circle"), ("goal", [world.goal], "#e87ba4", "diamond-open")]
-        st.plotly_chart(F.terrain_3d(world, paths, pts), key="mission3d")
+        show(F.terrain_3d(world, paths, pts), key="mission3d")
     with right:
         if res is None:
             fig = F.shaded_map(world, "Route options on the orbital prior (entropy overlay)", 560,
@@ -164,7 +233,7 @@ with tabs[0]:
                 F.add_path(fig, p.path, f"{n} ({p.length_m:.0f} m, {p.success_prob:.0%})", F.ROUTE_COLORS[n],
                            "solid" if n == mode else "dash", 3 if n == mode else 2)
             F.add_start_goal(fig, world)
-            st.plotly_chart(fig, key="mission2d")
+            show(fig, key="mission2d")
             st.info("This is the plan from orbit + one navcam look. Press **Inject hazard on path** to plant a hidden "
                     "boulder field on the route and watch the rover detect it and replan.")
         else:
@@ -182,7 +251,7 @@ with tabs[0]:
             F.add_points(fig, [t.rc for t in trav.targets], "targets", F.TARGET, "diamond", 11)
             F.add_start_goal(fig, trav.world)
             F.add_points(fig, [fr["rover_rc"]], "rover", "#ffffff", "triangle-up", 15)
-            st.plotly_chart(fig, key="replay_map")
+            show(fig, key="replay_map")
             recent = [e for e in res.log if e.step <= k and e.decision != "hazard_detected"][-3:]
             st.markdown(f"**Energy** {fr['energy_wh']:.0f} Wh · **distance** {fr['distance_m']:.0f} m · "
                         f"**cells observed** {fr['n_observed']:,} · **targets left** {fr['n_targets_left']}")
@@ -202,13 +271,13 @@ with tabs[1]:
     with c1:
         fig = F.cost_map(cm, "Cost (hover: breakdown)", 460)
         F.add_path(fig, (res.trajectory if res else plan.path), "route", F.ROUTE_COLORS.get(mode, F.TRACK))
-        st.plotly_chart(fig, key="costmap")
+        show(fig, key="costmap")
     with c2:
         hz = cm.hazard_prob
-        st.plotly_chart(F.grid_map(hz, F.SEQ["hazard"], "Hazard probability per cell", "hazard_prob", 0,
+        show(F.grid_map(hz, F.SEQ["hazard"], "Hazard probability per cell", "hazard_prob", 0,
                                    max(float(hz.max()), 1e-3), height=460), key="hazard")
     with c3:
-        st.plotly_chart(F.grid_map(site.layers.slope_deg, F.SEQ["slope"], "Slope (from DEM)", "slope (°)", 0,
+        show(F.grid_map(site.layers.slope_deg, F.SEQ["slope"], "Slope (from DEM)", "slope (°)", 0,
                                    float(np.percentile(site.layers.slope_deg, 99.5)), height=460), key="slope")
     st.markdown("**Cell inspector**")
     i1, i2, i3 = st.columns([1, 1, 4])
@@ -234,19 +303,19 @@ with tabs[2]:
     hmax = float(np.log(N_CLASSES))
     c1, c2 = st.columns(2)
     with c1:
-        st.plotly_chart(F.grid_map(site.prior.entropy, F.SEQ["entropy"], "Belief entropy: orbital prior", "nats", 0, hmax,
+        show(F.grid_map(site.prior.entropy, F.SEQ["entropy"], "Belief entropy: orbital prior", "nats", 0, hmax,
                                    height=440), key="ent_prior")
     with c2:
         fig = F.grid_map(ent_after, F.SEQ["entropy"], f"Belief entropy: {after_lbl}", "nats", 0, hmax, height=440)
         if res is not None:
             F.add_path(fig, res.trajectory[:sk + 1], "driven", F.TRACK, "solid", 2)
-        st.plotly_chart(fig, key="ent_after")
+        show(fig, key="ent_after")
     c3, c4, c5 = st.columns(3)
     with c3:
-        st.plotly_chart(F.grid_map(site.layers.p_slope_exceed, F.SEQ["slope"], "P(slope > 25°) — Monte-Carlo DEM noise",
+        show(F.grid_map(site.layers.p_slope_exceed, F.SEQ["slope"], "P(slope > 25°) — Monte-Carlo DEM noise",
                                    "P", 0, 1, height=400), key="pslope")
     with c4:
-        st.plotly_chart(F.grid_map(obs.astype(float), [[0, F.PLOT_BG], [1, "#3987e5"]], "Cells observed by the navcam",
+        show(F.grid_map(obs.astype(float), [[0, F.PLOT_BG], [1, "#3987e5"]], "Cells observed by the navcam",
                                    "observed", 0, 1, height=400, showscale=False), key="observed")
     with c5:
         b_now = res.belief if res is not None else site.belief
@@ -254,26 +323,26 @@ with tabs[2]:
         hit_prior = site.prior.class_probs.argmax(-1) == truth_now
         hit_now = b_now.class_probs.argmax(-1) == truth_now
         seen = b_now.observed_mask
-        st.plotly_chart(F.class_map(b_now.class_probs.argmax(-1),
+        show(F.class_map(b_now.class_probs.argmax(-1),
                                     f"Belief argmax — observed cells {hit_prior[seen].mean():.0%} → "
                                     f"{hit_now[seen].mean():.0%} correct", 400), key="cls_belief")
         st.caption(f"Whole map: {hit_prior.mean():.0%} → {hit_now.mean():.0%} (only {seen.mean():.0%} of cells "
                    "were observed; the rest is still the orbital prior).")
     with st.expander("Hidden ground truth (evaluation only — the rover never reads this)"):
-        st.plotly_chart(F.class_map((trav.world if trav else world).true_class, "True terrain classes", 460),
+        show(F.class_map((trav.world if trav else world).true_class, "True terrain classes", 460),
                         key="cls_truth")
 
 # =========================================================================== 4. Routes
 with tabs[3]:
     c1, c2 = st.columns([1, 1])
     with c1:
-        st.plotly_chart(F.pareto_fig(routes.sweep, routes.front, routes.modes), key="pareto")
+        show(F.pareto_fig(routes.sweep, routes.front, routes.modes), key="pareto")
     with c2:
         fig = F.shaded_map(world, "Route options", 460, site.belief.entropy, "Purples", "entropy (nats)", hmax)
         for n, p in routes.modes.items():
             F.add_path(fig, p.path, n, F.ROUTE_COLORS[n], "solid" if n == mode else "dash")
         F.add_start_goal(fig, world)
-        st.plotly_chart(fig, key="routes_map")
+        show(fig, key="routes_map")
     tbl = pd.DataFrame(routes.table()).rename(columns={"success_prob": "P(success) belief",
                                                        "success_prob_true": "P(success) truth",
                                                        "path_entropy_mean": "mean entropy on path"})
@@ -293,7 +362,7 @@ with tabs[4]:
                "± = bootstrap std; info_gain = value × normalised entropy.")
     c1, c2 = st.columns([1, 1])
     with c1:
-        st.plotly_chart(F.targets_bar(sci.targets, selected_ids), key="sci_bar")
+        show(F.targets_bar(sci.targets, selected_ids), key="sci_bar")
     with c2:
         fig = F.shaded_map(world, "Targets and selected tour", 420)
         for i, leg in enumerate([*sel.legs, *([sel.return_leg] if sel.return_leg else [])]):
@@ -303,7 +372,7 @@ with tabs[4]:
         F.add_points(fig, [t.rc for t in sci.targets if t.id not in selected_ids], "skipped", "#8a8a93", "diamond", 11,
                      [f"#{t.id}" for t in sci.targets if t.id not in selected_ids])
         F.add_start_goal(fig, world)
-        st.plotly_chart(fig, key="sci_map")
+        show(fig, key="sci_map")
     reasons = {e.evidence.get("target_id"): e.reason for e in sci.log}
     st.dataframe(pd.DataFrame([{"id": t.id, "cell": str(t.rc), "value": round(t.value_mean, 3),
                                 "± std": round(t.value_std, 3), "info_gain": round(t.info_gain, 3),
@@ -320,15 +389,15 @@ with tabs[5]:
     all_dec = sorted(counts)
     default = [d for d in all_dec if d != "hazard_detected"] or all_dec
     lkey = f"{st.session_state.run}-{src}-{mode}-{seed}-{size}-{lam}-{budget}-{radius}-{frac}-{hz_radius}"  # fresh widgets per log
-    show = st.multiselect("Decisions", all_dec, default=default, key=f"log_filter-{lkey}",
+    shown_dec = st.multiselect("Decisions", all_dec, default=default, key=f"log_filter-{lkey}",
                           format_func=lambda d: f"{d} ({counts[d]})")
-    entries = [e for e in log if e.decision in show]
+    entries = [e for e in log if e.decision in shown_dec]
     df = pd.DataFrame([{"step": e.step, "decision": e.decision, "event": e.event, "confidence": round(e.confidence, 3),
                         "cell": str(tuple(e.evidence["cell"])), "reason": e.reason} for e in entries])
     c1, c2 = st.columns([1.35, 1])
     with c1:
         ev = st.dataframe(df, hide_index=True, on_select="rerun", selection_mode="single-row",
-                          key=f"log_table-{lkey}-{'.'.join(show)}", height=440) if len(df) else None
+                          key=f"log_table-{lkey}-{'.'.join(shown_dec)}", height=440) if len(df) else None
         sel_rows = [i for i in (ev.selection.rows if ev is not None else []) if i < len(entries)]
         st.download_button("Download log (JSON)", json.dumps({"entries": log.to_records()}, indent=1),
                            "decision_log.json", "application/json", key="log_dl")
@@ -343,7 +412,7 @@ with tabs[5]:
             F.add_points(fig, [tuple(chosen.evidence["rover_rc"])], "rover at decision", "#ffffff", "triangle-up", 14)
             F.add_points(fig, [tuple(chosen.evidence["cell"])], "trigger cell", F.HAZARD, "x", 15)
         F.add_start_goal(fig, w_disp)
-        st.plotly_chart(fig, key="log_map")
+        show(fig, key="log_map")
     if chosen is not None:
         st.markdown(f"**s{chosen.step} · {chosen.decision}** (event `{chosen.event}`, confidence "
                     f"{chosen.confidence:.2f} = 1 − H/ln4 at the trigger cell) — {chosen.reason}")
@@ -365,7 +434,7 @@ with tabs[6]:
     trained = src != "fallback"
     c1, c2 = st.columns([1, 1])
     with c1:
-        st.plotly_chart(F.confusion_fig(site.confusion, "Sensor model P(predicted | true) — " +
+        show(F.confusion_fig(site.confusion, "Sensor model P(predicted | true) — " +
                                         ("trained AI4MARS U-Net" if trained else "fallback matrix")), key="confusion")
         st.caption("This matrix *is* the rover's sensor model: it samples navcam observations and gives the Bayes "
                    "likelihood P(obs | true class) for every belief update.")

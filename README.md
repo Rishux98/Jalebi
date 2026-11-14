@@ -109,6 +109,11 @@ Energy uses `1.5 Wh/m · (1 + 3·tan(slope))` (uphill-penalised, after gplanetar
 `safest` (risk weight 50, λ = 2 → avoids unknown terrain), `science` (balanced, through selected targets),
 plus a risk-weight sweep 0…10 whose non-dominated (length, P(success)) points form the Pareto front.
 
+**Movement:** 8-way (default, diagonals allowed, octile heuristic) or **4-way** — horizontal/vertical moves
+only, Manhattan heuristic (`Config.grid_connectivity`, sidebar *Rover movement*). 4-way routes are simpler and
+grid-aligned, ~10 % longer (350 m vs 320 m on the default site). Dashboard maps can be panned with the
+sidebar *Map view* arrows / sliders (zoom 1–8×, centre on start/goal) or by dragging and scrolling.
+
 ## 4. Sensor model from the confusion matrix
 
 `perception/train.py` trains `smp.Unet(resnet34)` on AI4MARS (streamed from Hugging Face, CE + Dice, AdamW,

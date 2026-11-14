@@ -109,6 +109,9 @@ class Config:
                                         # budget (not utility) is the binding constraint. (0.001/1.0/1500:
                                         # 0-8 picks depending on seed, budget never binding.)
 
+    # ---- planner grid
+    grid_connectivity: int = 8          # 8 = diagonal moves allowed; 4 = horizontal/vertical moves only
+
     # ---- sensing / autonomy
     sensor_radius: int = 6              # cells
     hazard_prob_max: float = 0.3        # replan if a path cell exceeds this (also a hard limit when planning)

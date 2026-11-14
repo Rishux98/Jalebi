@@ -171,7 +171,7 @@ def plan_targets(targets: Sequence[Target], costmap: CostMap, rover_rc: RC, cfg:
     """
     rw = cfg.pareto_risk_balanced if risk_weight is None else risk_weight
     for t in targets:
-        leg = astar(costmap, rover_rc, t.rc, cell_size, rw, mode=f"target{t.id}")
+        leg = astar(costmap, rover_rc, t.rc, cell_size, rw, mode=f"target{t.id}", connectivity=cfg.grid_connectivity)
         t.plan, t.reachable = leg, leg.found
         t.utility = _utility(t, leg, cfg, cell_size) if leg.found else float("-inf")
         if leg.found:
@@ -203,13 +203,14 @@ def select_under_budget(targets: Sequence[Target], costmap: CostMap, belief: Bel
 
     def ret_leg(t: Target) -> Plan:
         if t.id not in ret_cache:
-            ret_cache[t.id] = astar(costmap, t.rc, goal, cell_size, rw, mode="return")
+            ret_cache[t.id] = astar(costmap, t.rc, goal, cell_size, rw, mode="return",
+                                    connectivity=cfg.grid_connectivity)
         return ret_cache[t.id]
 
     while remaining:
         best = None
         for t in remaining:
-            leg = astar(costmap, pos, t.rc, cell_size, rw, mode=f"target{t.id}")
+            leg = astar(costmap, pos, t.rc, cell_size, rw, mode=f"target{t.id}", connectivity=cfg.grid_connectivity)
             ret = ret_leg(t) if leg.found else Plan()
             if not (leg.found and ret.found):
                 last[t.id] = {"why": "reachable", "pos": pos}
@@ -268,7 +269,7 @@ def select_under_budget(targets: Sequence[Target], costmap: CostMap, belief: Bel
             t.reason = build_reason("skip_target", ev)
         skipped.append(t)
 
-    return_leg = astar(costmap, pos, goal, cell_size, rw, mode="return")
+    return_leg = astar(costmap, pos, goal, cell_size, rw, mode="return", connectivity=cfg.grid_connectivity)
     total = used + (return_leg.energy_wh if return_leg.found else float("inf"))
     return Selection(selected, skipped, legs, return_leg if return_leg.found else None, total, budget)
 
