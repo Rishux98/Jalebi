@@ -1,9 +1,9 @@
 """Plotly figure builders for the dashboard (data in, ``go.Figure`` out; no Streamlit).
 
-Colour roles (dark surface, dataviz reference palette, dark steps):
-  routes (categorical, fixed order): shortest blue, balanced orange, safest aqua, science yellow
-  driven track: text-primary ink; replan markers: yellow X with dark ring; injected hazard: red ring
-  magnitude maps: one sequential hue each (cost Blues, hazard Reds, entropy Purples, slope Oranges)
+Colour language (mission-control theme, used everywhere):
+  safe = teal · caution = amber · hazard = red · unknown/uncertain = purple · path = cyan · science target = gold star
+  routes (categorical, fixed order) in route comparisons: shortest blue, balanced orange, safest teal, science gold
+  maps: terrain = earth-tone elevation x hillshade; cost Inferno; uncertainty Purples; hazard_prob Reds fixed 0-1
   terrain classes: fixed semantic colours (soil, bedrock, sand, big_rock)
 Grid convention: x = col, y = row (row 0 at the top).
 """
@@ -17,16 +17,19 @@ import plotly.graph_objects as go
 from core.io import hillshade
 from core.types import CLASS_NAMES, N_CLASSES, RC, CostMap, Plan, Target, World
 
-SURFACE = "#1a1a19"
-PLOT_BG = "#0e0e0d"
-TEXT = "#f0efec"
-TEXT_2 = "#c3c2b7"
-GRID = "#3a3936"
-ROUTE_COLORS = {"shortest": "#3987e5", "balanced": "#d95926", "safest": "#199e70", "science": "#c98500"}
-TRACK = "#f0efec"
-REPLAN = "#c98500"
-HAZARD = "#e66767"
-TARGET = "#9085e9"
+SURFACE = "#1A1D24"
+PLOT_BG = "#0E1117"
+TEXT = "#E6E6E6"
+TEXT_2 = "#A9AFBA"
+GRID = "#2E323C"
+# semantic colour language
+SAFE, CAUTION, HAZARD, UNKNOWN, PATH, SCIENCE = "#2EC4B6", "#F4A261", "#E63946", "#9D7CD8", "#00E5FF", "#FFD166"
+ROUTE_COLORS = {"shortest": "#3987e5", "balanced": "#FF6B35", "safest": SAFE, "science": SCIENCE}
+TRACK = PATH
+REPLAN = HAZARD
+TARGET = SCIENCE
+TARGET_SYMBOL = "star"
+EARTH = [[0.0, "#241811"], [0.25, "#4f3220"], [0.5, "#83552f"], [0.75, "#b88a5a"], [1.0, "#e9d3ae"]]
 CLASS_COLORS = ["#b07a45", "#8a8a93", "#e6cf7a", "#c0392b"]   # soil, bedrock, sand, big_rock
 COMPONENTS = ("slope", "rough", "class", "energy", "uncertainty")
 SHADE_SCALE = [[0.0, "#0b0b0a"], [1.0, "#7d7b74"]]             # dimmed hillshade base for dark surface
@@ -50,7 +53,13 @@ def _mix(hex_color: str, t: float) -> str:
     return "#" + "".join(f"{round(b + t * (c - b)):02x}" for b, c in zip(base, rgb))
 
 
-SEQ = {"cost": seq("#3987e5"), "hazard": seq("#e66767"), "entropy": seq("#9085e9"), "slope": seq("#d95926")}
+# Dark-mode variants of the requested scales: Inferno without its near-black end (black = impassable only);
+# Reds / Purples start at the dark surface instead of white so low values recede on the dark theme.
+_INFERNO = ["#420a68", "#6a176e", "#932667", "#bc3754", "#dd513a", "#f37819", "#fca50a", "#f6d746", "#fcffa4"]
+SEQ = {"cost": [[i / (len(_INFERNO) - 1), c] for i, c in enumerate(_INFERNO)],
+       "hazard": [[0.0, "#1E2129"], [0.15, "#5a1d24"], [0.5, "#b02a35"], [1.0, "#ff5a5f"]],
+       "entropy": [[0.0, "#1E2129"], [0.5, "#5b4a8f"], [1.0, "#c9b6ff"]],
+       "slope": seq("#F4A261")}
 OVERLAY = {"entropy": alpha_ramp("#a99ff2")}
 
 
@@ -94,11 +103,21 @@ def grid_map(z: np.ndarray, colorscale: str | list, title: str, colorbar: str, z
     return _layout(fig, height, title)
 
 
+def terrain_rgb(world: World) -> np.ndarray:
+    """(H, W, 3) uint8: earth-tone elevation colours modulated by hillshade (relief you can read at a glance)."""
+    z = world.dem.astype(np.float64)
+    zn = (z - z.min()) / (np.ptp(z) + 1e-9)
+    stops = np.array([s for s, _ in EARTH])
+    cols = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for _, c in EARTH], dtype=np.float64)
+    rgb = np.stack([np.interp(zn, stops, cols[:, k]) for k in range(3)], axis=-1)
+    shade = hillshade(world.dem, world.cell_size)[..., None].astype(np.float64)
+    return np.clip(rgb * (0.35 + 0.75 * shade), 0, 255).astype(np.uint8)
+
+
 def shaded_map(world: World, title: str = "", height: int = 520, overlay: np.ndarray | None = None,
                overlay_scale: str | list | None = None, overlay_name: str = "", zmax: float | None = None) -> go.Figure:
-    """Dimmed hillshade base map, optionally with a transparent-to-hue magnitude overlay."""
-    fig = go.Figure(go.Heatmap(z=hillshade(world.dem, world.cell_size), colorscale=SHADE_SCALE, showscale=False,
-                               hoverinfo="skip"))
+    """Terrain-coloured hillshade base map, optionally with a transparent-to-hue magnitude overlay."""
+    fig = go.Figure(go.Image(z=terrain_rgb(world), x0=0, dx=1, y0=0, dy=1, hoverinfo="skip", name="terrain"))
     if overlay is not None:
         scale = OVERLAY["entropy"] if overlay_scale in (None, "Purples") else overlay_scale
         fig.add_trace(go.Heatmap(z=_finite(overlay), colorscale=scale, zmin=0, zmax=zmax,
@@ -161,15 +180,18 @@ def add_rings(fig: go.Figure, injected: Sequence[dict], name: str = "injected ha
     return fig
 
 
-def cost_map(cm: CostMap, title: str = "Cost (black = impassable)", height: int = 520) -> go.Figure:
+def cost_map(cm: CostMap, title: str = "Cost (black = impassable)", height: int = 520,
+             zmax: float | None = None) -> go.Figure:
     """Cost heatmap whose hover shows the per-component breakdown + hazard_prob of the cell."""
     names = [k for k in COMPONENTS if k in cm.components]
-    cd = np.stack([_finite(cm.components[k]) for k in names] + [_finite(cm.hazard_prob)], axis=-1)
+    cd = np.round(np.stack([_finite(cm.components[k]) for k in names] + [_finite(cm.hazard_prob)], axis=-1), 3)
     hv = ("r=%{y} c=%{x}<br><b>cost %{z:.3f}</b><br>"
           + "<br>".join(f"{k}: %{{customdata[{i}]:.3f}}" for i, k in enumerate(names))
           + f"<br>hazard_prob: %{{customdata[{len(names)}]:.3f}}<extra></extra>")
     fin = cm.cost[np.isfinite(cm.cost)]
-    return grid_map(cm.cost, SEQ["cost"], title, "cost / m", 0, float(np.percentile(fin, 99)) if fin.size else None,
+    if zmax is None:
+        zmax = float(np.percentile(fin, 99)) if fin.size else None
+    return grid_map(cm.cost, SEQ["cost"], title, "cost / m", 0, zmax,
                     customdata=cd, hovertemplate=hv, height=height)
 
 
@@ -188,8 +210,9 @@ def terrain_3d(world: World, paths: Sequence[tuple[str, Sequence[RC], str, str]]
     dem = world.dem[::s, ::s]
     shade = hillshade(world.dem, world.cell_size)[::s, ::s]
     rows, cols = np.arange(0, h, s), np.arange(0, w, s)
-    fig = go.Figure(go.Surface(x=cols, y=rows, z=dem, surfacecolor=shade, colorscale=[[0, "#1c1b1a"], [1, "#a8a59c"]],
-                               showscale=False,
+    zn = (dem - dem.min()) / (np.ptp(dem) + 1e-9)
+    fig = go.Figure(go.Surface(x=cols, y=rows, z=dem, surfacecolor=0.55 * zn + 0.45 * shade, colorscale=EARTH,
+                               cmin=0, cmax=1, showscale=False,
                                hovertemplate="r=%{y} c=%{x}<br>z=%{z:.1f} m<extra></extra>", lighting=dict(ambient=0.9)))
     lift = 0.6
     for name, cells, color, dash in paths:
@@ -267,14 +290,22 @@ def targets_bar(targets: Sequence[Target], selected_ids: set[int], height: int =
     return _layout(fig, height, "Science value with bootstrap uncertainty")
 
 
-def confusion_fig(C: np.ndarray, title: str, height: int = 420) -> go.Figure:
+def confusion_fig(C: np.ndarray, title: str, height: int = 440, highlight: tuple[int, int] | None = (2, 0)) -> go.Figure:
+    """Sensor model heatmap: rows = true class, cols = predicted, values in %. ``highlight`` = (true, pred) cell."""
     C = np.asarray(C, np.float64)
-    fig = go.Figure(go.Heatmap(z=C, x=list(CLASS_NAMES), y=list(CLASS_NAMES), colorscale=SEQ["cost"], zmin=0, zmax=1,
-                               text=[[f"{v:.2f}" for v in row] for row in C], texttemplate="%{text}",
-                               textfont=dict(size=13), colorbar=dict(title="P", thickness=12),
-                               hovertemplate="true %{y} → predicted %{x}: %{z:.3f}<extra></extra>"))
-    fig.update_xaxes(title="predicted", side="bottom")
-    fig.update_yaxes(title="true", autorange="reversed")
+    idx = list(range(N_CLASSES))
+    fig = go.Figure(go.Heatmap(z=C * 100, x=idx, y=idx, colorscale=seq("#3987e5"), zmin=0, zmax=100,
+                               text=[[f"{v:.0%}" for v in row] for row in C], texttemplate="%{text}",
+                               textfont=dict(size=14, color=TEXT), colorbar=dict(title="%", thickness=12),
+                               customdata=[[[CLASS_NAMES[t], CLASS_NAMES[p]] for p in idx] for t in idx],
+                               hovertemplate="true %{customdata[0]} → observed %{customdata[1]}: %{z:.1f}%<extra></extra>"))
+    fig.update_xaxes(title="predicted / observed class", tickvals=idx, ticktext=list(CLASS_NAMES), side="bottom")
+    fig.update_yaxes(title="true class", tickvals=idx, ticktext=list(CLASS_NAMES), autorange="reversed")
+    if highlight is not None:
+        t, p = highlight
+        fig.add_shape(type="rect", x0=p - 0.5, x1=p + 0.5, y0=t - 0.5, y1=t + 0.5, line=dict(color=CAUTION, width=3))
+        fig.add_annotation(x=p + 0.5, y=t, xanchor="left", text=f"← {CLASS_NAMES[t]} seen as {CLASS_NAMES[p]}",
+                           showarrow=False, font=dict(color=CAUTION, size=12), bgcolor="rgba(14,17,23,0.8)")
     return _layout(fig, height, title)
 
 

@@ -21,7 +21,8 @@
 > sand with soil 18 % of the time, the rover's belief update knows that."
 
 ### 2:30 – 3:30 · Plan the routes  — tab **🚀 Mission**, then **🧭 Routes**
-1. Mission tab (planning view): point at the four routes on the entropy overlay.
+1. Press **Plan** (the page starts on a "Configure the mission" card). Mission tab: point at the four routes on
+   the uncertainty overlay and press **▶ Play** to show the planned route being driven.
    > "Shortest cuts straight through terrain orbit can't see well — purple is uncertainty."
 2. Routes tab: Pareto chart + table.
    > "Shortest: 285 m, 62 % success under our belief. Balanced: 320 m, 71 %. The grey crosses are the same
@@ -35,8 +36,10 @@
 ### 4:15 – 6:00 · The money shot — **💥 Inject hazard on path**
 1. Click **💥 Inject hazard on path** (sidebar). Caption: *"hidden boulder field r=3 planted at (22, 122)…
    rover not told"*. Metrics: **goal reached ✅ · 4 replans · 0 boulder cells entered**.
-2. Mission tab → drag **Replay step** to ~100, then 106, 114: the dashed plan bends around the field;
-   yellow ✕ = replans. Read the decision under the map:
+2. Mission tab → press **▶ Play** under the 3-D terrain (or **2×**; drag the step slider to ~100, then 106, 114).
+   The cyan rover drives; the ghosted planned path shows where it deviated; red ◆ = replans and the chart title
+   switches to *"Step 106 · REPLAN: P(big_rock)=0.75 > 0.60"*. Toggle **🔁 Loop animation** to leave it running
+   while you talk. Read the decision under the map:
    > "Step 106: cell (21, 121) now impassable — P(big_rock) 0.75 > 0.60. Keeping the old route: 48 %
    > success. New route: 76 %."
    At step 114 point out **pause_and_sense**: the next cell was 50 % boulder, so the rover stopped, took

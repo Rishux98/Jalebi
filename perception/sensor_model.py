@@ -59,6 +59,36 @@ def load_confusion(path: str | Path | None = None, cfg: Config = DEFAULT) -> tup
         return FALLBACK_CONFUSION.copy(), "fallback"
 
 
+def get_sensor_info(cfg: Config = DEFAULT, root: str | Path | None = None) -> dict:
+    """Which sensor model is active, for the UI and the pipeline. Never raises.
+
+    "trained" only when BOTH ``perception/confusion.npy`` (valid 4x4) and ``perception/metrics.json``
+    (readable JSON) exist; otherwise the documented fallback matrix.
+
+    Returns:
+        dict with ``source`` ("trained" | "fallback"), ``path`` (str | None), ``miou`` (float | None),
+        ``per_class_iou`` (dict | None) and ``confusion`` ((4, 4) float32, rows = true class, P(pred | true)).
+    """
+    import json
+
+    base = Path(root) if root is not None else Path(__file__).resolve().parents[1]
+    npy = base / cfg.confusion_path
+    met = npy.parent / "metrics.json"
+    try:
+        if npy.exists() and met.exists():
+            conf = _validate(np.load(npy))
+            m = json.loads(met.read_text())
+            miou = m.get("miou")
+            iou = m.get("iou")
+            return {"source": "trained", "path": str(npy),
+                    "miou": float(miou) if isinstance(miou, (int, float)) else None,
+                    "per_class_iou": dict(iou) if isinstance(iou, dict) else None, "confusion": conf}
+    except Exception:  # noqa: BLE001 — UI helper must never take the dashboard down
+        pass
+    return {"source": "fallback", "path": None, "miou": None, "per_class_iou": None,
+            "confusion": FALLBACK_CONFUSION.copy()}
+
+
 def observe(true_class: np.ndarray, rng: np.random.Generator,
             confusion: np.ndarray = FALLBACK_CONFUSION) -> np.ndarray:
     """Sample noisy class observations for an array of true classes (vectorised).

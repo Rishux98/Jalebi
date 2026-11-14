@@ -66,8 +66,11 @@ def test_app_click_through():
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=180)
     at.run()
     assert not at.exception
+    assert any("press" in str(m.value) and "Plan" in str(m.value) for m in at.markdown)   # empty state
     at.sidebar.selectbox(key="size").select(64).run()                  # small site for speed
     assert not at.exception
+    at.sidebar.button(key="plan_btn").click().run()
+    assert not at.exception and not at.error, [e.value for e in at.error]
     for mode in ("shortest", "safest", "science"):
         at.sidebar.selectbox(key="mode").select(mode).run()
         assert not at.exception, mode
@@ -75,7 +78,8 @@ def test_app_click_through():
     assert not at.exception
     at.sidebar.button(key="inject_btn").click().run()
     assert not at.exception
-    assert any("Inject" in str(c.value) or "injected" in str(c.value) for c in at.caption)
+    assert not at.error, [e.value for e in at.error]                   # no tab fell into its error card
+    assert any("hidden boulder field" in str(m.value) for m in at.markdown)
     log_tables = [d.value for d in at.dataframe if "reason" in d.value.columns and "decision" in d.value.columns]
     assert log_tables and len(log_tables[0]) > 0                       # filter not left empty after a run
     assert (log_tables[0]["decision"] == "plan").any()
@@ -92,11 +96,13 @@ def test_app_click_through():
         assert not at.exception, b
     at.sidebar.select_slider(key="view_zoom").set_value(2).run()
     at.sidebar.button(key="inject_btn").click().run()
-    assert not at.exception
+    assert not at.exception and not at.error
+    at.sidebar.toggle(key="loop").set_value(True).run()                # loop: repeated frames + JS hook
+    assert not at.exception and not at.error
     at.sidebar.radio(key="movement").set_value("8-way (diagonals)").run()
     from world.real_dem import default_tile_available
     if default_tile_available():                                       # real HiRISE terrain end-to-end
         at.sidebar.selectbox(key="source").select("HiRISE south-polar DTM").run()
         assert not at.exception
         at.sidebar.button(key="inject_btn").click().run()
-        assert not at.exception
+        assert not at.exception and not at.error, [e.value for e in at.error]

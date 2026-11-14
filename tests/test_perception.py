@@ -115,3 +115,27 @@ def test_mc_predict_shapes():
     assert a.entropy.dtype == np.float32 and (a.mutual_info >= 0).all()
     assert np.allclose(a.mean_probs.sum(1), 1.0, atol=1e-4)
     assert np.allclose(a.mean_probs, b.mean_probs)   # seeded -> deterministic
+
+
+# ----------------------------------------------------------------- get_sensor_info (UI badge source)
+def test_get_sensor_info_fallback_never_raises(tmp_path):
+    info = sm.get_sensor_info(root=tmp_path)                          # nothing there
+    assert info["source"] == "fallback" and info["path"] is None and info["miou"] is None
+    assert info["per_class_iou"] is None and info["confusion"].shape == (4, 4)
+    (tmp_path / "perception").mkdir()
+    np.save(tmp_path / "perception" / "confusion.npy", np.eye(4))     # npy alone is not enough
+    assert sm.get_sensor_info(root=tmp_path)["source"] == "fallback"
+    (tmp_path / "perception" / "metrics.json").write_text("{not json")  # corrupt metrics -> fallback, no raise
+    assert sm.get_sensor_info(root=tmp_path)["source"] == "fallback"
+
+
+def test_get_sensor_info_trained(tmp_path):
+    import json
+    d = tmp_path / "perception"
+    d.mkdir()
+    np.save(d / "confusion.npy", np.eye(4) * 3 + 1)
+    (d / "metrics.json").write_text(json.dumps({"miou": 0.61, "iou": {"soil": 0.7, "sand": 0.5}}))
+    info = sm.get_sensor_info(root=tmp_path)
+    assert info["source"] == "trained" and info["miou"] == pytest.approx(0.61)
+    assert info["per_class_iou"]["soil"] == pytest.approx(0.7)
+    assert np.allclose(info["confusion"].sum(1), 1.0)

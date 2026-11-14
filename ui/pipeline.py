@@ -17,7 +17,7 @@ from core.config import DEFAULT, Config
 from core.types import Belief, CostMap, Target, TerrainLayers, World
 from costmap.fuse import build_costmap, costmap_from_belief, one_hot_probs
 from explain.log import DecisionLog
-from perception.sensor_model import load_confusion
+from perception.sensor_model import get_sensor_info
 from planner.pareto import ParetoResult, run_pareto
 from science.targets import Selection, detect_candidates, plan_targets, select_under_budget
 from terrain.features import compute_layers
@@ -79,7 +79,8 @@ def build_site(size: int, seed: int, cfg: Config, source: str = "synthetic",
 
     w = new_world(size, seed, cfg, source)
     L = compute_layers(w, cfg)
-    C, src = load_confusion(cfg=cfg)
+    info = get_sensor_info(cfg)                     # same matrix the UI badge reports
+    C, src = info["confusion"], info["source"]
     prior = init_prior(w, cfg, seed)
     b = sense(prior, w, w.start, np.random.default_rng(seed), cfg, C)
     cm = costmap_from_belief(L, b, cfg)
