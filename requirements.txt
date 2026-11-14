@@ -1,15 +1,9 @@
-# ODYSSEY runtime dependencies (Python 3.10+)
-numpy
-scipy
-matplotlib
-pytest
-plotly
-streamlit
-rasterio
-opencv-python
-torch
-segmentation-models-pytorch
-datasets
-pandas
-# NOTE: `noise` (Perlin) was dropped: no Windows wheel (needs MSVC to build).
-# world/synthetic.py uses its own vectorised fractal value noise instead.
+# ODYSSEY dashboard runtime (Python 3.10+). This is what Streamlit Cloud installs.
+# Training / perception deps (torch, smp, datasets) live in requirements-dev.txt.
+numpy>=2.0,<3
+scipy>=1.13
+matplotlib>=3.8
+plotly>=5.20,<8
+streamlit>=1.40
+rasterio>=1.3
+pandas>=2.0

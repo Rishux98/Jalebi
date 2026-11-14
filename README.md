@@ -235,9 +235,15 @@ Python 3.10+ (developed on 3.11, Windows). The `.venv` was created with **uv**, 
 ```powershell
 uv venv .venv
 uv pip install --python ".\.venv\Scripts\python.exe" torch --index-url https://download.pytorch.org/whl/cpu
-uv pip install --python ".\.venv\Scripts\python.exe" -r requirements.txt
+uv pip install --python ".\.venv\Scripts\python.exe" -r requirements-dev.txt
 .\.venv\Scripts\Activate.ps1
 ```
+
+`requirements.txt` is the dashboard runtime only (no torch); `requirements-dev.txt` adds tests and the
+perception training stack.
+
+**Deploy (Streamlit Community Cloud):** share.streamlit.io → *Create app* → repo `Rishux98/Jalebi`,
+branch `main`, main file `app.py`. It installs `requirements.txt` and picks up `.streamlit/config.toml`.
 
 | Command | What it does |
 |---|---|

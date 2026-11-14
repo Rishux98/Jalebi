@@ -1,0 +1,9 @@
+# Full dev / training environment: pip install -r requirements-dev.txt
+-r requirements.txt
+pytest
+opencv-python
+torch
+segmentation-models-pytorch
+datasets
+# NOTE: `noise` (Perlin) was dropped: no Windows wheel (needs MSVC to build).
+# world/synthetic.py uses its own vectorised fractal value noise instead.
