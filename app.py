@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -874,6 +875,18 @@ def tab_onboard() -> None:
                    f"max gap **{int(gap.max())} cells** ({gap.max() * ob.world.cell_size:.0f} m), "
                    f"{(gap <= 1).mean():.0%} of onboard cells within 1 cell of the FULL path. Differences come from "
                    "the coarse-corridor + windowed A* and from uint8 cost rounding; decision rules are identical.")
+        k_gap = int(np.argmax(gap))
+        r_g, c_g = int(B_[k_gap][0]), int(B_[k_gap][1])
+        st.markdown(f"##### 🔍 Zoom at the biggest difference (step {k_gap}, cell ({r_g}, {c_g}))")
+        zfig = go.Figure(fig)
+        zfig.update_layout(height=380)
+        show(zfig, "onboard_paths_zoom", window=(r_g, c_g, 14))
+        gfig = go.Figure(go.Bar(x=np.arange(len(gap)), y=gap, marker_color=F.PATH,
+                                hovertemplate="step %{x}<br>%{y} cells from FULL path<extra></extra>"))
+        gfig.update_layout(height=200, margin=dict(l=10, r=10, t=30, b=10), title="Lateral gap along the route (cells)",
+                           xaxis_title="onboard step", yaxis=dict(dtick=1), bargap=0, template="plotly_dark",
+                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(gfig, key="onboard_gap", width="stretch", config={"displaylogo": False})
         cmp_rows = [("reached goal", res.reached_goal, ores.reached_goal),
                     ("driven (m)", round(res.distance_m, 1), round(ores.distance_m, 1)),
                     ("replans", res.replans, ores.replans),
