@@ -857,11 +857,27 @@ def tab_onboard() -> None:
         F.add_rings(fig, ores.meta["injected"], "hidden obstacle")
         F.add_path(fig, res.trajectory, f"FULL ({res.distance_m:.0f} m)", "#ffffff", "solid", 2.5)
         F.add_path(fig, ores.trajectory, f"ONBOARD ({ores.distance_m:.0f} m)", F.PATH, "dash", 2.5)
+        full_set = {tuple(map(int, p)) for p in res.trajectory}
+        ob_set = {tuple(map(int, p)) for p in ores.trajectory}
+        only_full = [p for p in dict.fromkeys(tuple(map(int, p)) for p in res.trajectory) if p not in ob_set]
+        only_ob = [p for p in dict.fromkeys(tuple(map(int, p)) for p in ores.trajectory) if p not in full_set]
+        F.add_points(fig, only_full, f"only FULL ({len(only_full)} cells)", "#FFD166", "square", 7)
+        F.add_points(fig, only_ob, f"only ONBOARD ({len(only_ob)} cells)", "#E040FB", "diamond", 8)
         F.add_start_goal(fig, ob.world)
         show(fig, "onboard_paths")
+        shared = len(full_set & ob_set)
+        A_, B_ = np.asarray(res.trajectory), np.asarray(ores.trajectory)
+        gap = np.abs(B_[:, None, :] - A_[None, :, :]).max(-1).min(1)    # cells from each onboard cell to FULL path
+        st.caption(f"**{len(only_full) + len(only_ob)} cells differ** — {len(only_full)} only on the FULL path (yellow ■), "
+                   f"{len(only_ob)} only on the ONBOARD path (magenta ◆); {shared} cells shared "
+                   f"({shared / max(len(full_set | ob_set), 1):.0%} exact overlap). But the paths run side by side: "
+                   f"max gap **{int(gap.max())} cells** ({gap.max() * ob.world.cell_size:.0f} m), "
+                   f"{(gap <= 1).mean():.0%} of onboard cells within 1 cell of the FULL path. Differences come from "
+                   "the coarse-corridor + windowed A* and from uint8 cost rounding; decision rules are identical.")
         cmp_rows = [("reached goal", res.reached_goal, ores.reached_goal),
                     ("driven (m)", round(res.distance_m, 1), round(ores.distance_m, 1)),
                     ("replans", res.replans, ores.replans),
+                    ("cells not on the other path", len(only_full), len(only_ob)),
                     ("initial-plan P(success)", f"{res.plans[0].success_prob:.1%}", f"{ores.plans[0].success_prob:.1%}"),
                     ("boulder cells entered", res.meta["entered_true_hazard_cells"],
                      ores.meta["entered_true_hazard_cells"]),
